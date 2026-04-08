@@ -87,8 +87,8 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         """Return the step value."""
         return 0.1
 
-    _DEFAULT_MIN = 4.2
-    _DEFAULT_MAX = 11.0
+    _DEFAULT_MIN = 1.4
+    _DEFAULT_MAX = 7.0
 
     @property
     def native_min_value(self) -> float:
@@ -198,14 +198,8 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         # coordinator.data (without going through async_set_updated_data) so
         # that an in-flight select.py mode-switch call can detect it after its
         # own API call finishes and re-send with the correct power.
-        # We deliberately avoid async_set_updated_data here: calling it would
-        # trigger _handle_coordinator_update on the select entity, which could
-        # see the optimistically-written chargeMode and prematurely clear
-        # _pending_mode — causing the very revert we are trying to prevent.
-        old_value = self._attr_native_value  # save before optimistic write for failure revert
+        old_value = self._attr_native_value
         self._attr_native_value = float(value)
-        # Start grace period immediately so coordinator updates during the API
-        # call (which can take several seconds) don't revert the optimistic value.
         self._pending_value = float(value)
         self._pending_until = time.monotonic() + 120.0
         device = self.coordinator.data.get(self.sn)
@@ -213,21 +207,26 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
             device["set_charge_power"] = float(value)
         self.async_write_ha_state()
 
-        # 2) Call SEMS API — always Fast mode (0), since entity is unavailable otherwise
+        # 2) Determine if the charger is actively charging (last_charge_work_status == 6)
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        is_active = data.get("last_charge_work_status") == 6
+        _LOGGER.debug("Active state (last_charge_work_status==6): %s", is_active)
+
+        # 3) Call SEMS API with the correct parameters (including is_active)
+        #    The API method is synchronous, so we wrap it in async_add_executor_job.
         ok = await self.hass.async_add_executor_job(
             self.api.set_charge_mode_gen2,
-            self.sn,
-            0,
-            value,
+            self.sn,          # wallbox_sn
+            0,                # mode (0 = Fast)
+            value,            # charge_power
+            None,             # ensure_minimum_charging_power
+            is_active,        # is_active (controls stop → set → start sequence)
+            False,            # renewToken
+            1,                # maxTokenRetries
         )
 
         if not ok:
             # API call failed — revert optimistic value and coordinator.data
-            # so the slider goes back to whatever the device actually has.
-            # But only revert if still in Fast mode (entity available): if the mode
-            # has already switched to PV while this call was in flight, we must NOT
-            # overwrite the preserved PV power value — the user set 11 kW and we
-            # should remember it for the next switch back to Fast.
             _LOGGER.warning(
                 "set_charge_mode failed for %s (power=%s), reverting optimistic value",
                 self.sn,
@@ -235,7 +234,7 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
             )
             if old_value is not None and self.coordinator.data.get(self.sn, {}).get("chargeMode", 0) == 0:
                 self._attr_native_value = old_value
-                self._pending_value = None  # revert cancels grace
+                self._pending_value = None
                 self._pending_until = 0.0
                 device = self.coordinator.data.get(self.sn)
                 if device is not None:
@@ -248,7 +247,7 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
                 translation_placeholders={"value": str(value)},
             )
 
-        # 3) Schedule a delayed refresh to confirm state from the API.
+        # 4) Schedule a delayed refresh to confirm state from the API.
         # set-mode can take up to 90s to return, then device needs more time to apply.
         # Poll 60s after set-mode returns (total from user action up to ~150s).
         self.coordinator.schedule_delayed_refresh(60)

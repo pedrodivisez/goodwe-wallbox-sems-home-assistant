@@ -31,6 +31,8 @@ _RequestTimeout = 30   # seconds for status reads
 _SetModeTimeout = 90   # seconds for EU gateway set-mode (device can take 60-90s to respond)
 _SetModeR0305Retries = 3   # retry count on R0305 (remote_control_fail — transient)
 _SetModeR0305Delay = 2.0   # seconds between R0305 retries
+_StopStartDelay = 5.0      # seconds between stop and set (increased from 2.0)
+_PostSetDelay = 4.0        # seconds after set-mode before start (new)
 
 _DefaultHeaders = {
     "Content-Type": "application/json",
@@ -59,11 +61,7 @@ class SemsApi:
     # ------------------------------------------------------------------
 
     def _fetch_web_token(self) -> dict | None:
-        """Login to semsplus.goodwe.com to obtain a semsPlusWeb token.
-
-        Password is sent as base64(MD5(password)) — observed from browser
-        traffic capture.  The request is signed with an empty uid/token x-signature.
-        """
+        """Login to semsplus.goodwe.com to obtain a semsPlusWeb token."""
         try:
             empty_token = json.dumps(
                 {"uid": "", "timestamp": 0, "token": "",
@@ -116,7 +114,6 @@ class SemsApi:
             if tok is None:
                 return False
             self._web_token = tok
-            # Update base URL from login response (handles regional gateways)
             api = (tok.get("api") or "").rstrip("/")
             if api:
                 self._web_api_base = api
@@ -127,12 +124,7 @@ class SemsApi:
         return f"{self._web_api_base}/{path.lstrip('/')}"
 
     def _build_web_headers(self) -> dict:
-        """Build headers for SEMS Plus EU gateway (requires x-signature).
-
-        Uses a dedicated semsPlusWeb token obtained from semsplus.goodwe.com.
-        Algorithm (from semsplus.goodwe.com JS bundle):
-          x-signature = base64(SHA256(timestamp_ms + '@' + uid + '@' + token) + '@' + timestamp_ms)
-        """
+        """Build headers for SEMS Plus EU gateway (requires x-signature)."""
         if not self._ensure_web_token():
             raise OutOfRetries("Could not obtain SEMS Plus web token")
         ts = str(int(time.time() * 1000))
@@ -150,10 +142,6 @@ class SemsApi:
             "x-signature": x_signature,
         }
 
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
-
     def test_authentication(self) -> bool:
         """Test if we can authenticate with the EU gateway."""
         try:
@@ -164,40 +152,20 @@ class SemsApi:
             _LOGGER.exception("SEMS Authentication exception: %s", exc)
             return False
 
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Commands
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Gen2 / SEMS-Plus EU gateway support
-    # ------------------------------------------------------------------
-
     def configure_gen2(self, plant_id: str | None, product_model: str | None = None) -> None:
-        """Supply gen2 plant info from config (call this after init if available)."""
+        """Supply gen2 plant info from config."""
         self._plant_id = plant_id or None
         self._product_model = product_model or None
-        _LOGGER.debug(
-            "SEMS gen2 config: plant_id=%s, product_model=%s",
-            self._plant_id,
-            self._product_model,
-        )
+        _LOGGER.debug("SEMS gen2 config: plant_id=%s, product_model=%s", self._plant_id, self._product_model)
 
     def _try_fetch_plant_id(self) -> str | None:
-        """Auto-detect plantId via EU gateway stations list (single-plant accounts only)."""
+        """Auto-detect plantId via EU gateway stations list."""
         try:
             stations = self.fetch_stations()
             if len(stations) == 1:
                 return str(stations[0].get("id") or "")
             if len(stations) > 1:
-                _LOGGER.info(
-                    "SEMS: multiple power stations found (%d), cannot auto-detect plantId. "
-                    "Set plant_id manually in integration options.",
-                    len(stations),
-                )
+                _LOGGER.info("SEMS: multiple power stations found (%d), cannot auto-detect plantId.", len(stations))
         except Exception as exc:  # noqa: BLE001
             _LOGGER.debug("SEMS plantId auto-detect failed: %s", exc)
         return None
@@ -208,31 +176,63 @@ class SemsApi:
             self._plant_id = self._try_fetch_plant_id()
         return self._plant_id
 
+    def change_status_gen2(self, wallbox_sn: str, action: str) -> bool:
+        """Start or stop charging via EU gateway."""
+        path = _PATH_START_CHARGE if action == "start" else _PATH_STOP_CHARGE
+        plant_id = self._ensure_plant_id()
+        if not plant_id:
+            _LOGGER.error("SEMS gen2 change_status: no plant_id, cannot %s charging", action)
+            return False
+        if not self._ensure_web_token():
+            _LOGGER.error("SEMS gen2 change_status: cannot obtain web token")
+            return False
+        headers = self._build_web_headers()
+        payload = {"sn": wallbox_sn, "plantId": plant_id}
+        if self._product_model:
+            payload["productModel"] = self._product_model
+        url = self._eu_url(path)
+        _LOGGER.debug("SEMS gen2 %sCharge: POST %s payload=%s", action, url, payload)
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=_SetModeTimeout)
+            _LOGGER.debug("SEMS gen2 %sCharge: HTTP %s body=%s", action, resp.status_code, resp.text)
+            rj = resp.json()
+            code = str(rj.get("code") or "")
+            if code == "C0602":
+                _LOGGER.debug("SEMS gen2 %sCharge: C0602, renewing token and retrying", action)
+                self._web_token = None
+                if not self._ensure_web_token(renew=True):
+                    return False
+                headers = self._build_web_headers()
+                resp = requests.post(url, headers=headers, json=payload, timeout=_SetModeTimeout)
+                rj = resp.json()
+                code = str(rj.get("code") or "")
+            ok = code in ("00000", "0") or rj.get("data") is True
+            if ok:
+                _LOGGER.info("SEMS gen2 %sCharge succeeded (sn=%s)", action, wallbox_sn)
+            else:
+                _LOGGER.warning("SEMS gen2 %sCharge non-success code=%s body=%s", action, code, resp.text[:300])
+            return ok
+        except requests.exceptions.Timeout:
+            _LOGGER.warning("SEMS gen2 %sCharge timed out (sn=%s)", action, wallbox_sn)
+            return False
+        except Exception as exc:
+            _LOGGER.error("SEMS gen2 %sCharge failed: %s", action, exc)
+            return False
+
     def set_charge_mode_gen2(
         self,
-        wallboxSn,
+        wallbox_sn,
         mode,
-        chargePower=None,
+        charge_power=None,
         ensure_minimum_charging_power: bool | None = None,
+        is_active: bool = False,
         renewToken: bool = False,
         maxTokenRetries: int = 1,
     ):
-        """Set charge mode/power exclusively via EU gateway (Gen2 / HCA series).
-
-        Skips the legacy semsportal.com SetChargeMode call entirely — this avoids
-        the wallbox being "busy" when the EU gateway set-mode arrives.
-        Only EU gateway set-mode is attempted (no set-config fallback) so we can
-        cleanly test whether the old API was causing the 30s timeout.
-        """
+        """Set charge power using EU gateway, with stop/set/start sequence if active."""
         _LOGGER.debug(
-            "SEMS v%s - set_charge_mode_gen2(sn=%s, mode=%s, power=%s, ensure_min=%s, renewToken=%s, retries=%s)",
-            API_VERSION,
-            wallboxSn,
-            mode,
-            chargePower,
-            ensure_minimum_charging_power,
-            renewToken,
-            maxTokenRetries,
+            "SEMS v%s - set_charge_mode_gen2(sn=%s, mode=%s, power=%s, ensure_min=%s, is_active=%s, renewToken=%s, retries=%s)",
+            API_VERSION, wallbox_sn, mode, charge_power, ensure_minimum_charging_power, is_active, renewToken, maxTokenRetries,
         )
         try:
             if maxTokenRetries < 0:
@@ -240,109 +240,95 @@ class SemsApi:
 
             plant_id = self._ensure_plant_id()
             if not plant_id:
-                _LOGGER.error(
-                    "SEMS gen2: no plant_id — cannot set charge mode without EU gateway plant_id"
-                )
+                _LOGGER.error("SEMS gen2: no plant_id — cannot set charge mode")
                 return False
 
             if not self._ensure_web_token(renew=renewToken):
                 _LOGGER.error("SEMS gen2: cannot obtain web token")
                 return False
 
+            # 1. Stop if active
+            if is_active:
+                _LOGGER.debug("Cargador activo, enviando stopCharge primero")
+                stop_ok = self.change_status_gen2(wallbox_sn, "stop")
+                if not stop_ok:
+                    _LOGGER.warning("stopCharge falló, continuando igualmente")
+                time.sleep(_StopStartDelay)  # wait after stop
+
+            # 2. Set-mode with correct field: chargeMaxPower
             headers = self._build_web_headers()
-            payload: dict = {
-                "sn": wallboxSn,
+            payload = {
+                "sn": wallbox_sn,
                 "plantId": plant_id,
                 "mode": mode,
             }
             if self._product_model:
                 payload["productModel"] = self._product_model
-            if chargePower is not None:
-                payload["chargePowerSetted"] = float(chargePower)
+            if charge_power is not None:
+                payload["chargeMaxPower"] = float(charge_power)
             if ensure_minimum_charging_power is not None:
                 payload["ensureMinimumChargingPower"] = ensure_minimum_charging_power
 
             _eu_set_mode_url = self._eu_url(_PATH_SET_MODE)
-            _LOGGER.debug(
-                "SEMS gen2 set-mode (exclusive): POST %s payload=%s",
-                _eu_set_mode_url, payload,
-            )
-            try:
-                for attempt in range(1, _SetModeR0305Retries + 2):
-                    resp = requests.post(
-                        _eu_set_mode_url,
-                        headers=headers,
-                        json=payload,
-                        timeout=_SetModeTimeout,
-                    )
-                    _LOGGER.debug(
-                        "SEMS gen2 set-mode (attempt %d): HTTP %s body=%s",
-                        attempt, resp.status_code, resp.text,
-                    )
-                    rj = resp.json()
-                    code = str(rj.get("code") or "")
-                    if code in ("00000", "0") or rj.get("data") is True:
-                        _LOGGER.info(
-                            "SEMS gen2 set-mode succeeded (sn=%s, mode=%s, power=%s, attempt=%d)",
-                            wallboxSn, mode, chargePower, attempt,
-                        )
-                        return True
-                    if code == "C0602" and maxTokenRetries > 0:
-                        _LOGGER.debug(
-                            "SEMS gen2 set-mode C0602 (session expired), renewing web token and retrying"
-                        )
-                        self._web_token = None
-                        return self.set_charge_mode_gen2(
-                            wallboxSn, mode, chargePower=chargePower,
-                            ensure_minimum_charging_power=ensure_minimum_charging_power,
-                            renewToken=True, maxTokenRetries=maxTokenRetries - 1,
-                        )
-                    if code == "R0305":
-                        # Transient "remote_control_fail" — retry after short delay
-                        if attempt <= _SetModeR0305Retries:
-                            _LOGGER.debug(
-                                "SEMS gen2 set-mode R0305 (remote_control_fail), "
-                                "retrying in %.1fs (attempt %d/%d)",
-                                _SetModeR0305Delay, attempt, _SetModeR0305Retries,
-                            )
-                            time.sleep(_SetModeR0305Delay)
-                            continue
-                        _LOGGER.warning(
-                            "SEMS gen2 set-mode R0305 persisted after %d attempts (sn=%s)",
-                            _SetModeR0305Retries, wallboxSn,
-                        )
-                    else:
-                        _LOGGER.warning(
-                            "SEMS gen2 set-mode non-success code=%s body=%s",
-                            code, resp.text[:300],
-                        )
+            _LOGGER.debug("SEMS gen2 set-mode: POST %s payload=%s", _eu_set_mode_url, payload)
+
+            set_success = False
+            for attempt in range(1, _SetModeR0305Retries + 2):
+                resp = requests.post(_eu_set_mode_url, headers=headers, json=payload, timeout=_SetModeTimeout)
+                _LOGGER.debug("SEMS gen2 set-mode (attempt %d): HTTP %s body=%s", attempt, resp.status_code, resp.text)
+                rj = resp.json()
+                code = str(rj.get("code") or "")
+                if code in ("00000", "0") or rj.get("data") is True:
+                    _LOGGER.info("SEMS gen2 set-mode succeeded (sn=%s, mode=%s, power=%s, attempt=%d)", wallbox_sn, mode, charge_power, attempt)
+                    set_success = True
                     break
+                if code == "C0602" and maxTokenRetries > 0:
+                    _LOGGER.debug("SEMS gen2 set-mode C0602 (session expired), renewing web token and retrying")
+                    self._web_token = None
+                    return self.set_charge_mode_gen2(
+                        wallbox_sn, mode, charge_power=charge_power,
+                        ensure_minimum_charging_power=ensure_minimum_charging_power,
+                        is_active=is_active,
+                        renewToken=True, maxTokenRetries=maxTokenRetries - 1,
+                    )
+                if code == "R0305":
+                    if attempt <= _SetModeR0305Retries:
+                        _LOGGER.debug("SEMS gen2 set-mode R0305, retrying in %.1fs (attempt %d/%d)", _SetModeR0305Delay, attempt, _SetModeR0305Retries)
+                        time.sleep(_SetModeR0305Delay)
+                        continue
+                    _LOGGER.warning("SEMS gen2 set-mode R0305 persisted after %d attempts (sn=%s)", _SetModeR0305Retries, wallbox_sn)
+                else:
+                    _LOGGER.warning("SEMS gen2 set-mode non-success code=%s body=%s", code, resp.text[:300])
+                break
+
+            if not set_success:
                 return False
-            except requests.exceptions.Timeout:
-                _LOGGER.warning(
-                    "SEMS gen2 set-mode timed out after %ss (sn=%s)",
-                    _SetModeTimeout, wallboxSn,
-                )
-                return False
+
+            # 3. If was active, restart charging after a delay
+            if is_active:
+                _LOGGER.debug("Reanudando carga con startCharge después de esperar %s s", _PostSetDelay)
+                time.sleep(_PostSetDelay)
+                start_ok = self.change_status_gen2(wallbox_sn, "start")
+                if not start_ok:
+                    _LOGGER.warning("startCharge falló después de set-mode")
+                # Even if start fails, set-mode succeeded; we return success.
+            return True
+
         except OutOfRetries:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.error("Unable to execute gen2 SetChargeMode command. %s", exc)
             return False
 
     def get_data_gen2(self, wallbox_sn: str) -> dict | None:
-        """Fetch device status from EU gateway ev-charger/detail (Gen2 / HCA series).
-
-        Returns None on any failure — the coordinator will mark the update as
-        failed and retry on the next poll interval.
-        """
+        """Fetch device status from EU gateway ev-charger/detail."""
         if not self._ensure_web_token():
             _LOGGER.warning("SEMS gen2 getData: no web token")
             return None
 
         plant_id = self._ensure_plant_id()
         headers = self._build_web_headers()
-        payload: dict = {"sn": wallbox_sn}
+        payload = {"sn": wallbox_sn}
         if plant_id:
             payload["plantId"] = plant_id
         if self._product_model:
@@ -350,15 +336,9 @@ class SemsApi:
 
         try:
             _eu_detail_url = self._eu_url(_PATH_DETAIL)
-            _LOGGER.debug(
-                "SEMS gen2 getData: POST %s payload=%s", _eu_detail_url, payload
-            )
-            resp = requests.post(
-                _eu_detail_url, headers=headers, json=payload, timeout=_RequestTimeout
-            )
-            _LOGGER.info(
-                "SEMS gen2 getData: HTTP %s body=%s", resp.status_code, resp.text
-            )
+            _LOGGER.debug("SEMS gen2 getData: POST %s payload=%s", _eu_detail_url, payload)
+            resp = requests.post(_eu_detail_url, headers=headers, json=payload, timeout=_RequestTimeout)
+            _LOGGER.info("SEMS gen2 getData: HTTP %s body=%s", resp.status_code, resp.text)
             rj = resp.json()
             code = str(rj.get("code") or "")
             raw = rj.get("data")
@@ -370,25 +350,16 @@ class SemsApi:
                     _LOGGER.error("SEMS gen2 getData: could not renew web token")
                     return None
                 headers = self._build_web_headers()
-                resp = requests.post(
-                    _eu_detail_url, headers=headers, json=payload, timeout=_RequestTimeout
-                )
-                _LOGGER.info(
-                    "SEMS gen2 getData retry: HTTP %s body=%s", resp.status_code, resp.text
-                )
+                resp = requests.post(_eu_detail_url, headers=headers, json=payload, timeout=_RequestTimeout)
+                _LOGGER.info("SEMS gen2 getData retry: HTTP %s body=%s", resp.status_code, resp.text)
                 rj = resp.json()
                 code = str(rj.get("code") or "")
                 raw = rj.get("data")
 
             if code not in ("00000", "0") or not raw:
-                _LOGGER.warning(
-                    "SEMS gen2 getData: unexpected code=%s, no data returned", code
-                )
+                _LOGGER.warning("SEMS gen2 getData: unexpected code=%s, no data returned", code)
                 return None
 
-            # Map EU gateway fields → internal dict format.
-            # Field names are inferred; all raw keys are logged above so we can
-            # expand this mapping as the response format becomes clear.
             def _get(*keys, default=None):
                 for k in keys:
                     v = raw.get(k)
@@ -396,7 +367,7 @@ class SemsApi:
                         return v
                 return default
 
-            result: dict = {
+            result = {
                 "sn": wallbox_sn,
                 "name": _get("name", "deviceName", default="EV Charger"),
                 "status": _get("status", "statusCode", "chargeStatus", default="unknown"),
@@ -415,88 +386,24 @@ class SemsApi:
                 "schedule_hour": _get("schedule_hour", "scheduleHour", default=0),
                 "schedule_minute": _get("schedule_minute", "scheduleMinute", default=0),
                 "schedule_total_minute": _get("schedule_total_minute", "scheduleTotalMinute", default=0),
-                "set_charge_power": _get(
-                    "set_charge_power", "chargePowerSetted", "ratedMaxiChargePower",
-                    "chargePowerLimit", default=None,
-                ),
+                # IMPORTANT: use chargeMaxPower as the actual set limit (the one that works)
+                "set_charge_power": _get("chargeMaxPower", default=None),
                 "max_charge_power": _get("max_charge_power", "maxChargePower", default=None),
                 "min_charge_power": _get("min_charge_power", "minChargePower", default=None),
                 "charge_from_grid": _get("charge_from_grid", "chargeFromGrid", default=1),
                 "isOpen": _get("isOpen", "isConnected", default=False),
                 "currentLimit": _get("currentLimit", "currentLimitValue", default=0.0),
-                # ensureMinimumChargingPower: 0 = disabled, 170 (0xAA) = enabled.
-                # Use bool() so 170 → True, 0 → False, None → False.
-                "ensure_minimum_charging_power": bool(
-                    raw.get("ensureMinimumChargingPower", 0)
-                ),
+                "ensure_minimum_charging_power": bool(raw.get("ensureMinimumChargingPower", 0)),
             }
             _LOGGER.debug("SEMS gen2 getData mapped result: %s", result)
             return result
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.warning("SEMS gen2 getData failed: %s", exc)
             return None
 
-    def change_status_gen2(self, wallbox_sn: str, action: str) -> bool:
-        """Start or stop charging via EU gateway (Gen2 / HCA series).
-
-        action: "start" → startCharge endpoint; "stop" → stopCharge endpoint.
-        Payload identical to set-mode: sn + plantId + productModel.
-        """
-        path = _PATH_START_CHARGE if action == "start" else _PATH_STOP_CHARGE
-        plant_id = self._ensure_plant_id()
-        if not plant_id:
-            _LOGGER.error("SEMS gen2 change_status: no plant_id, cannot %s charging", action)
-            return False
-        if not self._ensure_web_token():
-            _LOGGER.error("SEMS gen2 change_status: cannot obtain web token")
-            return False
-        headers = self._build_web_headers()
-        payload: dict = {"sn": wallbox_sn, "plantId": plant_id}
-        if self._product_model:
-            payload["productModel"] = self._product_model
-        url = self._eu_url(path)
-        _LOGGER.debug("SEMS gen2 %sCharge: POST %s payload=%s", action, url, payload)
-        try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=_SetModeTimeout)
-            _LOGGER.debug(
-                "SEMS gen2 %sCharge: HTTP %s body=%s", action, resp.status_code, resp.text
-            )
-            rj = resp.json()
-            code = str(rj.get("code") or "")
-            if code == "C0602":
-                _LOGGER.debug("SEMS gen2 %sCharge: C0602, renewing token and retrying", action)
-                self._web_token = None
-                if not self._ensure_web_token(renew=True):
-                    return False
-                headers = self._build_web_headers()
-                resp = requests.post(url, headers=headers, json=payload, timeout=_SetModeTimeout)
-                rj = resp.json()
-                code = str(rj.get("code") or "")
-            ok = code in ("00000", "0") or rj.get("data") is True
-            if ok:
-                _LOGGER.info("SEMS gen2 %sCharge succeeded (sn=%s)", action, wallbox_sn)
-            else:
-                _LOGGER.warning(
-                    "SEMS gen2 %sCharge non-success code=%s body=%s",
-                    action, code, resp.text[:300],
-                )
-            return ok
-        except requests.exceptions.Timeout:
-            _LOGGER.warning("SEMS gen2 %sCharge timed out (sn=%s)", action, wallbox_sn)
-            return False
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.error("SEMS gen2 %sCharge failed: %s", action, exc)
-            return False
-
     def fetch_last_charge(self, wallbox_sn: str) -> dict | None:
-        """Fetch last charge session from EU gateway (GET getLastCharge).
-
-        Returns a dict with:
-          - ``last_charge_work_status`` (int): 6 = actively charging, other = not charging
-          - ``last_charge_power`` (float): actual EV power draw in kW (pevChar)
-        Returns None on any error (non-blocking — detail data is still valid).
-        """
+        """Fetch last charge session from EU gateway (GET getLastCharge)."""
         plant_id = self._ensure_plant_id()
         if not plant_id:
             _LOGGER.debug("fetch_last_charge: no plant_id, skipping")
@@ -531,7 +438,7 @@ class SemsApi:
             }
             _LOGGER.debug("fetch_last_charge: %s", result)
             return result
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.warning("fetch_last_charge failed: %s", exc)
             return None
 
@@ -540,11 +447,7 @@ class SemsApi:
     # ------------------------------------------------------------------
 
     def fetch_device_info(self, wallbox_sn: str) -> dict:
-        """Fetch device metadata (productModel, ratedPower, etc.) from the EU gateway.
-
-        GET /sems-remote/api/ev-charger/control-item-content-list/{sn}
-        Returns a dict with at least 'productModel' (empty string on failure).
-        """
+        """Fetch device metadata (productModel, ratedPower, etc.)."""
         if not self._ensure_web_token():
             return {}
         headers = self._build_web_headers()
@@ -559,17 +462,12 @@ class SemsApi:
             if str(rj.get("code") or "") not in ("00000", "0"):
                 return {}
             return rj.get("data") or {}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.debug("SEMS fetch_device_info failed: %s", exc)
             return {}
 
     def fetch_stations(self) -> list[dict]:
-        """Return list of plants/stations from the EU gateway.
-
-        Each dict contains at least 'id' and 'name' (best-effort — field names
-        are inferred; raw response is logged at DEBUG for diagnostics).
-        Returns an empty list on any error.
-        """
+        """Return list of plants/stations from the EU gateway."""
         if not self._ensure_web_token():
             _LOGGER.warning("SEMS fetch_stations: no web token")
             return []
@@ -587,50 +485,25 @@ class SemsApi:
             if isinstance(data, list):
                 records = data
             else:
-                # Response uses dataList (centralized endpoint) or records/list
-                records = (
-                    data.get("dataList")
-                    or data.get("records")
-                    or data.get("list")
-                    or data.get("data")
-                    or []
-                )
-            # Normalise: ensure each record has 'id' and 'name'
+                records = data.get("dataList") or data.get("records") or data.get("list") or data.get("data") or []
             result = []
             for r in (records if isinstance(records, list) else []):
-                sid = (
-                    r.get("stationId")
-                    or r.get("id")
-                    or r.get("plantId")
-                    or r.get("powerStationId")
-                )
+                sid = r.get("stationId") or r.get("id") or r.get("plantId") or r.get("powerStationId")
                 name = r.get("stationName") or r.get("name") or str(sid)
                 if sid:
                     result.append({"id": sid, "name": name, **r})
             return result
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.error("SEMS fetch_stations failed: %s", exc)
             return []
 
     def fetch_ev_chargers(self, station_id: str | None = None) -> list[dict]:
-        """Return list of EV chargers from the EU gateway.
-
-        If *station_id* is provided the request is scoped to that plant.
-        Each dict contains at least 'sn' (and optionally 'name', 'model',
-        'stationId').  Raw response is logged at DEBUG for diagnostics.
-        Returns an empty list on any error.
-
-        Response structure (centralized/page endpoint):
-          data.dataList[]
-            .stationId, .stationName
-            .children[]
-              .sn, .name, .deviceType, .stationId
-        """
+        """Return list of EV chargers from the EU gateway."""
         if not self._ensure_web_token():
             _LOGGER.warning("SEMS fetch_ev_chargers: no web token")
             return []
         headers = self._build_web_headers()
-        payload: dict = {"deviceTypeList": ["EV_CHARGER"], "current": 1, "size": 50}
+        payload = {"deviceTypeList": ["EV_CHARGER"], "current": 1, "size": 50}
         if station_id:
             payload["stationId"] = station_id
         try:
@@ -643,32 +516,22 @@ class SemsApi:
             rj = resp.json()
             _LOGGER.debug("SEMS fetch_ev_chargers raw: %s", rj)
             data = rj.get("data") or {}
-
-            # Primary structure: data.dataList[].children[]
             data_list = data.get("dataList") if isinstance(data, dict) else None
             if data_list:
                 chargers = []
                 for station in data_list:
                     for child in (station.get("children") or []):
                         if child.get("deviceType") == "EV_CHARGER" or child.get("sn"):
-                            # Enrich child with stationId if missing
                             if not child.get("stationId"):
                                 child["stationId"] = station.get("stationId")
                             chargers.append(child)
                 if chargers:
                     return chargers
-
-            # Fallback: flat records/list/data
             if isinstance(data, list):
                 return data
-            records = (
-                data.get("records")
-                or data.get("list")
-                or data.get("data")
-                or []
-            )
+            records = data.get("records") or data.get("list") or data.get("data") or []
             return records if isinstance(records, list) else []
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _LOGGER.error("SEMS fetch_ev_chargers failed: %s", exc)
             return []
 

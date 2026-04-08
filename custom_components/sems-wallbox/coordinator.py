@@ -31,6 +31,7 @@ class SemsUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._hass = hass
         self._api = api
         self._station_id: str = entry.data[CONF_STATION_ID]
+        self._is_charging: bool = False  # tracked internally
 
         # Options take precedence over data, then fall back to default
         self._interval_idle = int(entry.options.get(
@@ -57,6 +58,16 @@ class SemsUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             name="SEMS API wallbox",
             update_interval=timedelta(seconds=self._interval_idle),
         )
+
+    @property
+    def sn(self) -> str:
+        """Return the wallbox serial number."""
+        return self._station_id
+
+    @property
+    def is_charging(self) -> bool:
+        """Return True if the wallbox is actively charging (last_charge_work_status == 6)."""
+        return self._is_charging
 
     def schedule_delayed_refresh(self, delay: float = 5.0) -> None:
         """Schedule a one-shot refresh after `delay` seconds.
@@ -125,6 +136,7 @@ class SemsUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Dynamic polling: faster while actively charging.
         # Use workStu=6 from getLastCharge (startStatus in /detail is always False in PV mode).
         is_charging = result.get("last_charge_work_status") == 6
+        self._is_charging = is_charging  # store for property access
         new_interval = timedelta(
             seconds=self._interval_charging if is_charging else self._interval_idle
         )
