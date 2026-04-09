@@ -147,7 +147,8 @@ class SemsWorkStateSensor(CoordinatorEntity, SensorEntity):
     """Workstate sensor for the wallbox EV plug state."""
 
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = ["not_plugged_in", "connected", "finished_charging", "dash", "unknown"]
+    # Opciones: not_plugged_in, connected, finished_charging, charged, dash, unknown
+    _attr_options = ["not_plugged_in", "connected", "finished_charging", "charged", "dash", "unknown"]
     _attr_should_poll = False
     _attr_has_entity_name = True
     _attr_translation_key = "workstate"
@@ -168,10 +169,15 @@ class SemsWorkStateSensor(CoordinatorEntity, SensorEntity):
     def native_value(self) -> str:
         """Return the workstate of the device as a human-readable string."""
         data = self.coordinator.data.get(self.sn, {})
-        # When actively charging, the Gen2 API still reports 'available_gun_no_insered'.
-        # Override with dash (as the old API did via empty string during charging).
-        if data.get("last_charge_work_status") == 6:
-            return "dash"
+        last_status = data.get("last_charge_work_status")
+
+        # Priorizar last_charge_work_status (más fiable)
+        if last_status == 6:
+            return "connected"      # Cargando
+        if last_status == 8:
+            return "charged"        # Carga completada
+
+        # Fallback a workstate si no tenemos last_status o es otro valor
         workstate = data.get("workstate")
 
         # Old semsportal.com API values
@@ -200,7 +206,7 @@ class SemsWorkStateSensor(CoordinatorEntity, SensorEntity):
             return "mdi:power-plug-off-outline"
         if state == "connected":
             return "mdi:power-plug"
-        if state == "finished_charging":
+        if state in ("finished_charging", "charged"):
             return "mdi:battery-check"
         if state == "dash":
             return "mdi:progress-clock"

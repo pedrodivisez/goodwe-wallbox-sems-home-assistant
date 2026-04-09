@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import asyncio
 
 from homeassistant.components.number import (
     NumberDeviceClass,
@@ -87,28 +88,37 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         """Return the step value."""
         return 0.1
 
-    _DEFAULT_MIN = 4.2
-    _DEFAULT_MAX = 11.0
-
+    # ==================== Dynamic Min/Max depending on the model (GW7 / GW11 / GW22) ====================
     @property
     def native_min_value(self) -> float:
-        """Return the minimum value, read from API data when available."""
-        data = self.coordinator.data.get(self.sn, {}) or {}
-        v = data.get("min_charge_power")
-        try:
-            return float(v) if v is not None else self._DEFAULT_MIN
-        except (TypeError, ValueError):
-            return self._DEFAULT_MIN
+        model = self.coordinator.data.get(self.sn, {}).get("productModel", "")
+        if "GW7" in model:
+            return 1.4
+        elif "GW22" in model:
+            return 4.2
+        else:  # GW11
+            return 4.2
 
     @property
     def native_max_value(self) -> float:
-        """Return the maximum value, read from API data when available."""
-        data = self.coordinator.data.get(self.sn, {}) or {}
-        v = data.get("max_charge_power")
-        try:
-            return float(v) if v is not None else self._DEFAULT_MAX
-        except (TypeError, ValueError):
-            return self._DEFAULT_MAX
+        model = self.coordinator.data.get(self.sn, {}).get("productModel", "")
+        if "GW7" in model:
+            return 7.0
+        elif "GW22" in model:
+            return 22.0
+        else:  # GW11
+            return 11.0
+
+    # ==================== COMPATIBILITY GEN1 + GEN2 ====================
+    @property
+    def native_value(self) -> float | None:
+        data = self.coordinator.data.get(self.sn, {})
+        return (
+            data.get("set_charge_power") or
+            data.get("chargeMaxPower") or
+            data.get("chargePowerSetted") or
+            None
+        )
 
     @property
     def unique_id(self) -> str:
@@ -134,14 +144,11 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
 
     @property
     def available(self) -> bool:
-        """Always available — entity is editable only in Fast mode (chargeMode=0)."""
-        return self.coordinator.last_update_success
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        """Expose whether the slider is currently editable."""
+        """Only available when chargeMode is Fast (0); disabled in PV modes."""
+        if not self.coordinator.last_update_success:
+            return False
         data = self.coordinator.data.get(self.sn, {}) or {}
-        return {"editable": data.get("chargeMode", 0) == 0}
+        return data.get("chargeMode", 0) == 0
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -161,7 +168,7 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
                 except (TypeError, ValueError):
                     pass
         else:
-            # Grace expired or no pending set — always accept the API value
+            # Grace expired or no pending set — accept the API value
             if self._pending_value is not None:
                 self._pending_value = None
             if set_charge_power is not None:
@@ -187,7 +194,7 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         await self.coordinator.async_request_refresh()
 
     async def async_set_native_value(self, value: float) -> None:
-        """Handle change from UI slider — switches to Fast mode (0) with the given power."""
+        """Handle change from UI slider (only reachable in Fast mode)."""
         _LOGGER.debug(
             "Setting set_charge_power for SN=%s to %s",
             self.sn,
@@ -198,14 +205,8 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         # coordinator.data (without going through async_set_updated_data) so
         # that an in-flight select.py mode-switch call can detect it after its
         # own API call finishes and re-send with the correct power.
-        # We deliberately avoid async_set_updated_data here: calling it would
-        # trigger _handle_coordinator_update on the select entity, which could
-        # see the optimistically-written chargeMode and prematurely clear
-        # _pending_mode — causing the very revert we are trying to prevent.
-        old_value = self._attr_native_value  # save before optimistic write for failure revert
+        old_value = self._attr_native_value
         self._attr_native_value = float(value)
-        # Start grace period immediately so coordinator updates during the API
-        # call (which can take several seconds) don't revert the optimistic value.
         self._pending_value = float(value)
         self._pending_until = time.monotonic() + 120.0
         device = self.coordinator.data.get(self.sn)
@@ -213,7 +214,7 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
             device["set_charge_power"] = float(value)
         self.async_write_ha_state()
 
-        # 2) Call SEMS API — always Fast mode (0), since entity is unavailable otherwise
+        # 2) Call SEMS API — always Fast mode (0)
         ok = await self.hass.async_add_executor_job(
             self.api.set_charge_mode_gen2,
             self.sn,
@@ -223,19 +224,14 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
 
         if not ok:
             # API call failed — revert optimistic value and coordinator.data
-            # so the slider goes back to whatever the device actually has.
-            # But only revert if still in Fast mode (entity available): if the mode
-            # has already switched to PV while this call was in flight, we must NOT
-            # overwrite the preserved PV power value — the user set 11 kW and we
-            # should remember it for the next switch back to Fast.
             _LOGGER.warning(
                 "set_charge_mode failed for %s (power=%s), reverting optimistic value",
                 self.sn,
                 value,
             )
-            if old_value is not None and self.coordinator.data.get(self.sn, {}).get("chargeMode", 0) == 0:
+            if old_value is not None and self.available:
                 self._attr_native_value = old_value
-                self._pending_value = None  # revert cancels grace
+                self._pending_value = None
                 self._pending_until = 0.0
                 device = self.coordinator.data.get(self.sn)
                 if device is not None:
@@ -249,6 +245,4 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
             )
 
         # 3) Schedule a delayed refresh to confirm state from the API.
-        # set-mode can take up to 90s to return, then device needs more time to apply.
-        # Poll 60s after set-mode returns (total from user action up to ~150s).
         self.coordinator.schedule_delayed_refresh(60)
