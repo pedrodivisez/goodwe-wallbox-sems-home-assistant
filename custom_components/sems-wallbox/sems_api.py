@@ -386,8 +386,15 @@ class SemsApi:
                 "schedule_hour": _get("schedule_hour", "scheduleHour", default=0),
                 "schedule_minute": _get("schedule_minute", "scheduleMinute", default=0),
                 "schedule_total_minute": _get("schedule_total_minute", "scheduleTotalMinute", default=0),
-                # IMPORTANT: use chargeMaxPower as the actual set limit (the one that works)
-                "set_charge_power": _get("chargeMaxPower", default=None),
+
+                # === COMPATIBILIDAD GEN1 + GEN2 ===
+                "set_charge_power": (
+                    _get("chargeMaxPower") or
+                    _get("chargePowerSetted") or
+                    _get("set_charge_power") or
+                    None
+                ),
+
                 "max_charge_power": _get("max_charge_power", "maxChargePower", default=None),
                 "min_charge_power": _get("min_charge_power", "minChargePower", default=None),
                 "charge_from_grid": _get("charge_from_grid", "chargeFromGrid", default=1),
