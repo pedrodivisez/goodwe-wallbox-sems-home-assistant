@@ -227,7 +227,7 @@ class SemsApi:
         renewToken: bool = False,
         maxTokenRetries: int = 1,
     ):
-        """Set charge power using EU gateway (versión simplificada sin stop/start sequence)."""
+        """Set charge power using EU gateway (simplified version without stop/start sequence)."""
         _LOGGER.debug(
             "SEMS v%s - set_charge_mode_gen2(sn=%s, mode=%s, power=%s, renewToken=%s, retries=%s)",
             API_VERSION, wallbox_sn, mode, charge_power, renewToken, maxTokenRetries,
@@ -245,7 +245,7 @@ class SemsApi:
                 _LOGGER.error("SEMS gen2: cannot obtain web token")
                 return False
 
-            # Set-mode directo (sin stop ni start)
+            # Direct set-mode (no stop/start)
             headers = self._build_web_headers()
             payload = {
                 "sn": wallbox_sn,
@@ -364,13 +364,8 @@ class SemsApi:
                 "schedule_minute": _get("schedule_minute", "scheduleMinute", default=0),
                 "schedule_total_minute": _get("schedule_total_minute", "scheduleTotalMinute", default=0),
 
-                # === COMPATIBILIDAD GEN1 + GEN2 ===
-                "set_charge_power": (
-                    _get("chargeMaxPower") or
-                    _get("chargePowerSetted") or
-                    _get("set_charge_power") or
-                    None
-                ),
+                # Gen1 + Gen2 compatibility: try Gen2 key first, then Gen1
+                "set_charge_power": _get("chargeMaxPower", "chargePowerSetted", default=None),
 
                 "max_charge_power": _get("max_charge_power", "maxChargePower", default=None),
                 "min_charge_power": _get("min_charge_power", "minChargePower", default=None),
@@ -518,7 +513,3 @@ class SemsApi:
         except Exception as exc:
             _LOGGER.error("SEMS fetch_ev_chargers failed: %s", exc)
             return []
-
-
-class OutOfRetries(exceptions.HomeAssistantError):
-    """Error to indicate too many error attempts."""
