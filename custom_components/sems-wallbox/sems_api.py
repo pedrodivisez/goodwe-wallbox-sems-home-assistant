@@ -7,6 +7,9 @@ import time
 import requests
 from homeassistant import exceptions
 
+class OutOfRetries(Exception):
+    """Raised when authentication retries are exhausted."""
+
 _LOGGER = logging.getLogger(__name__)
 
 API_VERSION = "1.4.0"
@@ -31,8 +34,6 @@ _RequestTimeout = 30   # seconds for status reads
 _SetModeTimeout = 90   # seconds for EU gateway set-mode (device can take 60-90s to respond)
 _SetModeR0305Retries = 3   # retry count on R0305 (remote_control_fail — transient)
 _SetModeR0305Delay = 2.0   # seconds between R0305 retries
-_StopStartDelay = 5.0      # seconds between stop and set (increased from 2.0)
-_PostSetDelay = 4.0        # seconds after set-mode before start (new)
 
 _DefaultHeaders = {
     "Content-Type": "application/json",
