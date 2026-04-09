@@ -87,8 +87,25 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         """Return the step value."""
         return 0.1
 
-    _DEFAULT_MIN = 1.4
-    _DEFAULT_MAX = 7.0
+    @property
+    def native_min_value(self) -> float:
+        model = self.coordinator.data.get(self.sn, {}).get("productModel", "")
+        if "GW7" in model:
+            return 1.4
+        elif "GW22" in model:
+            return 4.2
+        else:  # GW11 y la mayoría
+            return 4.2
+
+    @property
+    def native_max_value(self) -> float:
+        model = self.coordinator.data.get(self.sn, {}).get("productModel", "")
+        if "GW7" in model:
+            return 7.0
+        elif "GW22" in model:
+            return 22.0
+        else:  # GW11 y la mayoría
+            return 11.0
 
     @property
     def native_min_value(self) -> float:
