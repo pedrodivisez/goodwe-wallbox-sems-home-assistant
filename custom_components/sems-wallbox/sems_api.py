@@ -224,15 +224,13 @@ class SemsApi:
         wallbox_sn,
         mode,
         charge_power=None,
-        ensure_minimum_charging_power: bool | None = None,
-        is_active: bool = False,
         renewToken: bool = False,
         maxTokenRetries: int = 1,
     ):
-        """Set charge power using EU gateway, with stop/set/start sequence if active."""
+        """Set charge power using EU gateway (versión simplificada sin stop/start sequence)."""
         _LOGGER.debug(
-            "SEMS v%s - set_charge_mode_gen2(sn=%s, mode=%s, power=%s, ensure_min=%s, is_active=%s, renewToken=%s, retries=%s)",
-            API_VERSION, wallbox_sn, mode, charge_power, ensure_minimum_charging_power, is_active, renewToken, maxTokenRetries,
+            "SEMS v%s - set_charge_mode_gen2(sn=%s, mode=%s, power=%s, renewToken=%s, retries=%s)",
+            API_VERSION, wallbox_sn, mode, charge_power, renewToken, maxTokenRetries,
         )
         try:
             if maxTokenRetries < 0:
@@ -247,15 +245,7 @@ class SemsApi:
                 _LOGGER.error("SEMS gen2: cannot obtain web token")
                 return False
 
-            # 1. Stop if active
-            if is_active:
-                _LOGGER.debug("Cargador activo, enviando stopCharge primero")
-                stop_ok = self.change_status_gen2(wallbox_sn, "stop")
-                if not stop_ok:
-                    _LOGGER.warning("stopCharge falló, continuando igualmente")
-                time.sleep(_StopStartDelay)  # wait after stop
-
-            # 2. Set-mode with correct field: chargeMaxPower
+            # Set-mode directo (sin stop ni start)
             headers = self._build_web_headers()
             payload = {
                 "sn": wallbox_sn,
@@ -266,8 +256,6 @@ class SemsApi:
                 payload["productModel"] = self._product_model
             if charge_power is not None:
                 payload["chargeMaxPower"] = float(charge_power)
-            if ensure_minimum_charging_power is not None:
-                payload["ensureMinimumChargingPower"] = ensure_minimum_charging_power
 
             _eu_set_mode_url = self._eu_url(_PATH_SET_MODE)
             _LOGGER.debug("SEMS gen2 set-mode: POST %s payload=%s", _eu_set_mode_url, payload)
@@ -278,41 +266,30 @@ class SemsApi:
                 _LOGGER.debug("SEMS gen2 set-mode (attempt %d): HTTP %s body=%s", attempt, resp.status_code, resp.text)
                 rj = resp.json()
                 code = str(rj.get("code") or "")
+
                 if code in ("00000", "0") or rj.get("data") is True:
                     _LOGGER.info("SEMS gen2 set-mode succeeded (sn=%s, mode=%s, power=%s, attempt=%d)", wallbox_sn, mode, charge_power, attempt)
                     set_success = True
                     break
+
                 if code == "C0602" and maxTokenRetries > 0:
-                    _LOGGER.debug("SEMS gen2 set-mode C0602 (session expired), renewing web token and retrying")
+                    _LOGGER.debug("SEMS gen2 set-mode C0602, renewing web token")
                     self._web_token = None
                     return self.set_charge_mode_gen2(
                         wallbox_sn, mode, charge_power=charge_power,
-                        ensure_minimum_charging_power=ensure_minimum_charging_power,
-                        is_active=is_active,
                         renewToken=True, maxTokenRetries=maxTokenRetries - 1,
                     )
+
                 if code == "R0305":
                     if attempt <= _SetModeR0305Retries:
-                        _LOGGER.debug("SEMS gen2 set-mode R0305, retrying in %.1fs (attempt %d/%d)", _SetModeR0305Delay, attempt, _SetModeR0305Retries)
+                        _LOGGER.debug("SEMS gen2 set-mode R0305, retrying in %.1fs", _SetModeR0305Delay)
                         time.sleep(_SetModeR0305Delay)
                         continue
-                    _LOGGER.warning("SEMS gen2 set-mode R0305 persisted after %d attempts (sn=%s)", _SetModeR0305Retries, wallbox_sn)
-                else:
-                    _LOGGER.warning("SEMS gen2 set-mode non-success code=%s body=%s", code, resp.text[:300])
+
+                _LOGGER.warning("SEMS gen2 set-mode non-success code=%s", code)
                 break
 
-            if not set_success:
-                return False
-
-            # 3. If was active, restart charging after a delay
-            if is_active:
-                _LOGGER.debug("Reanudando carga con startCharge después de esperar %s s", _PostSetDelay)
-                time.sleep(_PostSetDelay)
-                start_ok = self.change_status_gen2(wallbox_sn, "start")
-                if not start_ok:
-                    _LOGGER.warning("startCharge falló después de set-mode")
-                # Even if start fails, set-mode succeeded; we return success.
-            return True
+            return set_success
 
         except OutOfRetries:
             raise
