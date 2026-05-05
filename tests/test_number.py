@@ -190,22 +190,22 @@ class TestMinMax:
     def test_min_fallback_to_default_when_none(self):
         entity = _make_entity()
         entity.coordinator.data[SAMPLE_SN]["min_charge_power"] = None
-        assert entity.native_min_value == _number_mod.SemsNumber._DEFAULT_MIN
+        assert entity.native_min_value == entity._model_limits()[0]
 
     def test_max_fallback_to_default_when_none(self):
         entity = _make_entity()
         entity.coordinator.data[SAMPLE_SN]["max_charge_power"] = None
-        assert entity.native_max_value == _number_mod.SemsNumber._DEFAULT_MAX
+        assert entity.native_max_value == entity._model_limits()[1]
 
     def test_min_fallback_on_invalid_string(self):
         entity = _make_entity()
         entity.coordinator.data[SAMPLE_SN]["min_charge_power"] = "bad"
-        assert entity.native_min_value == _number_mod.SemsNumber._DEFAULT_MIN
+        assert entity.native_min_value == entity._model_limits()[0]
 
     def test_max_fallback_on_invalid_string(self):
         entity = _make_entity()
         entity.coordinator.data[SAMPLE_SN]["max_charge_power"] = "bad"
-        assert entity.native_max_value == _number_mod.SemsNumber._DEFAULT_MAX
+        assert entity.native_max_value == entity._model_limits()[1]
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ class TestSetNativeValue:
         """
         entity = _make_entity(chargeMode=0, set_charge_power=7.4)
         await entity.async_set_native_value(9.0)
-        entity.api.set_charge_mode_gen2.assert_called_once_with(SAMPLE_SN, 0, 9.0)
+        entity.api.set_charge_mode_gen2.assert_called_once_with(SAMPLE_SN, 0, 9.0, None)
 
     @pytest.mark.asyncio
     async def test_slider_updates_coordinator_data_before_api_call(self):
@@ -236,7 +236,7 @@ class TestSetNativeValue:
 
         data_at_api_call_time: list[float] = []
 
-        def capture_api(sn, mode, value):
+        def capture_api(sn, mode, value, ensure_min=None):
             # Read coordinator.data at the moment the API is called
             data_at_api_call_time.append(
                 entity.coordinator.data[SAMPLE_SN].get("set_charge_power")
@@ -268,9 +268,9 @@ class TestSetNativeValue:
 
         original_set_charge_mode_gen2 = entity.api.set_charge_mode_gen2
 
-        def capture_api(sn, mode, value):
+        def capture_api(sn, mode, value, ensure_min=None):
             call_order.append(("api_call", value))
-            return original_set_charge_mode_gen2(sn, mode, value)
+            return original_set_charge_mode_gen2(sn, mode, value, ensure_min)
 
         entity.api.set_charge_mode_gen2 = capture_api
 
@@ -293,7 +293,7 @@ class TestSetNativeValue:
         """Slider must always use mode=0, never another mode value."""
         entity = _make_entity(chargeMode=0)
         await entity.async_set_native_value(5.5)
-        _, mode_arg, _ = entity.api.set_charge_mode_gen2.call_args[0]
+        _, mode_arg, *_ = entity.api.set_charge_mode_gen2.call_args[0]
         assert mode_arg == 0
 
     @pytest.mark.asyncio
@@ -301,7 +301,7 @@ class TestSetNativeValue:
         """The value passed to the API must equal the slider value."""
         entity = _make_entity(chargeMode=0)
         await entity.async_set_native_value(10.3)
-        _, _, power_arg = entity.api.set_charge_mode_gen2.call_args[0]
+        _, _, power_arg, *_ = entity.api.set_charge_mode_gen2.call_args[0]
         assert power_arg == 10.3
 
     @pytest.mark.asyncio
@@ -337,7 +337,7 @@ class TestSetNativeValue:
         entity.api.set_charge_mode_gen2 = MagicMock(return_value=True)
         await entity.async_set_native_value(9.0)
 
-        entity.api.set_charge_mode_gen2.assert_called_once_with(SAMPLE_SN, 0, 9.0)
+        entity.api.set_charge_mode_gen2.assert_called_once_with(SAMPLE_SN, 0, 9.0, None)
         assert entity._attr_native_value == 9.0
 
 

@@ -32,6 +32,7 @@ _SetModeTimeout = 90   # seconds for EU gateway set-mode (device can take 60-90s
 _SetModeR0305Retries = 3   # retry count on R0305 (remote_control_fail — transient)
 _SetModeR0305Delay = 2.0   # seconds between R0305 retries
 
+
 _DefaultHeaders = {
     "Content-Type": "application/json",
     "Accept": "application/json",
@@ -258,7 +259,9 @@ class SemsApi:
             if self._product_model:
                 payload["productModel"] = self._product_model
             if chargePower is not None:
+                # Send both field names — gen1 uses chargePowerSetted, gen2 uses chargeMaxPower
                 payload["chargePowerSetted"] = float(chargePower)
+                payload["chargeMaxPower"] = float(chargePower)
             if ensure_minimum_charging_power is not None:
                 payload["ensureMinimumChargingPower"] = ensure_minimum_charging_power
 
@@ -268,6 +271,7 @@ class SemsApi:
                 _eu_set_mode_url, payload,
             )
             try:
+                set_success = False
                 for attempt in range(1, _SetModeR0305Retries + 2):
                     resp = requests.post(
                         _eu_set_mode_url,
@@ -286,7 +290,8 @@ class SemsApi:
                             "SEMS gen2 set-mode succeeded (sn=%s, mode=%s, power=%s, attempt=%d)",
                             wallboxSn, mode, chargePower, attempt,
                         )
-                        return True
+                        set_success = True
+                        break
                     if code == "C0602" and maxTokenRetries > 0:
                         _LOGGER.debug(
                             "SEMS gen2 set-mode C0602 (session expired), renewing web token and retrying"
@@ -317,7 +322,11 @@ class SemsApi:
                             code, resp.text[:300],
                         )
                     break
-                return False
+
+                if not set_success:
+                    return False
+
+                return True
             except requests.exceptions.Timeout:
                 _LOGGER.warning(
                     "SEMS gen2 set-mode timed out after %ss (sn=%s)",
@@ -356,8 +365,10 @@ class SemsApi:
             resp = requests.post(
                 _eu_detail_url, headers=headers, json=payload, timeout=_RequestTimeout
             )
-            _LOGGER.info(
-                "SEMS gen2 getData: HTTP %s body=%s", resp.status_code, resp.text
+            _LOGGER.debug(
+                "SEMS gen2 getData: POST %s → HTTP %s\n%s",
+                _eu_detail_url, resp.status_code,
+                json.dumps(resp.json(), indent=2, ensure_ascii=False),
             )
             rj = resp.json()
             code = str(rj.get("code") or "")
@@ -373,8 +384,10 @@ class SemsApi:
                 resp = requests.post(
                     _eu_detail_url, headers=headers, json=payload, timeout=_RequestTimeout
                 )
-                _LOGGER.info(
-                    "SEMS gen2 getData retry: HTTP %s body=%s", resp.status_code, resp.text
+                _LOGGER.debug(
+                    "SEMS gen2 getData (retry): POST %s → HTTP %s\n%s",
+                    _eu_detail_url, resp.status_code,
+                    json.dumps(resp.json(), indent=2, ensure_ascii=False),
                 )
                 rj = resp.json()
                 code = str(rj.get("code") or "")
@@ -415,10 +428,7 @@ class SemsApi:
                 "schedule_hour": _get("schedule_hour", "scheduleHour", default=0),
                 "schedule_minute": _get("schedule_minute", "scheduleMinute", default=0),
                 "schedule_total_minute": _get("schedule_total_minute", "scheduleTotalMinute", default=0),
-                "set_charge_power": _get(
-                    "set_charge_power", "chargePowerSetted", "ratedMaxiChargePower",
-                    "chargePowerLimit", default=None,
-                ),
+                "set_charge_power": _get("chargePowerSetted", "chargeMaxPower", default=None),
                 "max_charge_power": _get("max_charge_power", "maxChargePower", default=None),
                 "min_charge_power": _get("min_charge_power", "minChargePower", default=None),
                 "charge_from_grid": _get("charge_from_grid", "chargeFromGrid", default=1),
@@ -430,7 +440,6 @@ class SemsApi:
                     raw.get("ensureMinimumChargingPower", 0)
                 ),
             }
-            _LOGGER.debug("SEMS gen2 getData mapped result: %s", result)
             return result
 
         except Exception as exc:  # noqa: BLE001
@@ -510,6 +519,11 @@ class SemsApi:
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=_RequestTimeout)
             rj = resp.json()
+            _LOGGER.debug(
+                "fetch_last_charge: GET %s → HTTP %s\n%s",
+                resp.url, resp.status_code,
+                json.dumps(rj, indent=2, ensure_ascii=False),
+            )
             code = str(rj.get("code") or "")
             if code == "C0602":
                 self._web_token = None
@@ -518,19 +532,22 @@ class SemsApi:
                 headers = self._build_web_headers()
                 resp = requests.get(url, headers=headers, params=params, timeout=_RequestTimeout)
                 rj = resp.json()
+                _LOGGER.debug(
+                    "fetch_last_charge (retry): GET %s → HTTP %s\n%s",
+                    resp.url, resp.status_code,
+                    json.dumps(rj, indent=2, ensure_ascii=False),
+                )
                 code = str(rj.get("code") or "")
             if code != "00000":
                 _LOGGER.debug("fetch_last_charge: non-success code=%s", code)
                 return None
             log = (rj.get("data") or {}).get("chargeLog") or {}
-            result = {
+            return {
                 "last_charge_work_status": log.get("workStu"),
                 "last_charge_power": log.get("pevChar"),
                 "last_charge_duration_minutes": log.get("chargeTimeLength"),
                 "last_charge_energy": log.get("currentChargeQuantity"),
             }
-            _LOGGER.debug("fetch_last_charge: %s", result)
-            return result
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("fetch_last_charge failed: %s", exc)
             return None

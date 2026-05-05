@@ -103,6 +103,7 @@
                     "not_plugged_in": "Not plugged in",
                     "connected": "Connected",
                     "finished_charging": "Finished charging",
+                    "charged": "Charged",
                     "dash": "--",
                     "unknown": "Unknown"
                 }

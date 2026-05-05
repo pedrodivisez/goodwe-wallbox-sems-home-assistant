@@ -103,6 +103,7 @@
                     "not_plugged_in": "Nepřipojeno",
                     "connected": "Připojeno",
                     "finished_charging": "Nabíjení dokončeno",
+                    "charged": "Nabito",
                     "dash": "--",
                     "unknown": "Neznámý"
                 }

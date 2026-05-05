@@ -87,8 +87,23 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         """Return the step value."""
         return 0.1
 
-    _DEFAULT_MIN = 4.2
-    _DEFAULT_MAX = 11.0
+    def _model_limits(self) -> tuple[float, float]:
+        """Return (min_kW, max_kW) as fallback based on product model string.
+
+        Per-model defaults when API doesn't return min/max:
+          GW7  → 1.4 –  7.0 kW
+          GW11 → 4.2 – 11.0 kW
+          GW22 → 4.2 – 22.0 kW
+        Defaults to GW7 range when model is unknown (smallest / safest).
+        """
+        model = ((self.coordinator.data.get(self.sn, {}) or {}).get("model") or "").upper()
+        if "GW22" in model:
+            return 4.2, 22.0
+        if "GW11" in model:
+            return 4.2, 11.0
+        if "GW7" in model:
+            return 1.4, 7.0
+        return 1.4, 7.0  # safe default (smallest model)
 
     @property
     def native_min_value(self) -> float:
@@ -96,9 +111,9 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         data = self.coordinator.data.get(self.sn, {}) or {}
         v = data.get("min_charge_power")
         try:
-            return float(v) if v is not None else self._DEFAULT_MIN
+            return float(v) if v is not None else self._model_limits()[0]
         except (TypeError, ValueError):
-            return self._DEFAULT_MIN
+            return self._model_limits()[0]
 
     @property
     def native_max_value(self) -> float:
@@ -106,9 +121,9 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         data = self.coordinator.data.get(self.sn, {}) or {}
         v = data.get("max_charge_power")
         try:
-            return float(v) if v is not None else self._DEFAULT_MAX
+            return float(v) if v is not None else self._model_limits()[1]
         except (TypeError, ValueError):
-            return self._DEFAULT_MAX
+            return self._model_limits()[1]
 
     @property
     def unique_id(self) -> str:
@@ -213,12 +228,13 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
             device["set_charge_power"] = float(value)
         self.async_write_ha_state()
 
-        # 2) Call SEMS API — always Fast mode (0), since entity is unavailable otherwise
+        # 2) Call SEMS API — always Fast mode (0)
         ok = await self.hass.async_add_executor_job(
             self.api.set_charge_mode_gen2,
             self.sn,
             0,
             value,
+            None,  # ensure_minimum_charging_power
         )
 
         if not ok:

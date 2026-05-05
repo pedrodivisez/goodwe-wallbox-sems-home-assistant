@@ -280,16 +280,16 @@ class TestSemsSensor:
 class TestSemsWorkStateSensor:
     def _sensor(self, workstate: str):
         # Clear workStu so the workstate field drives the result, not the override.
-        d = {**SAMPLE_DATA, "workstate": workstate, "last_charge_work_status": 8}
+        d = {**SAMPLE_DATA, "workstate": workstate, "last_charge_work_status": None}
         coord = _make_coordinator(d)
         return SemsWorkStateSensor(coord, SAMPLE_SN)
 
-    def test_workstu_charging_returns_dash(self):
-        # When workStu=6, the API's workstate is unreliable — always show dash.
+    def test_workstu_charging_returns_connected(self):
+        # When workStu=6 (actively charging), car is definitely connected — override unreliable detail API.
         d = {**SAMPLE_DATA, "workstate": "available_gun_no_insered", "last_charge_work_status": 6}
         coord = _make_coordinator(d)
         s = SemsWorkStateSensor(coord, SAMPLE_SN)
-        assert s.native_value == "dash"
+        assert s.native_value == "connected"
 
     def test_not_plugged_in(self):
         s = self._sensor("EVDetail_Status_Waiting_Stat00")
