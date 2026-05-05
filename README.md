@@ -9,10 +9,10 @@ Home Assistant custom integration for the **GoodWe Wallbox**.
 
 Supports two independent connection modes:
 
-| Mode | How it works | Internet required |
-|------|-------------|-------------------|
-| **Local Modbus TCP** | Connects directly to the wallbox over your LAN using Modbus TCP | No |
-| **SEMS cloud** | Polls the SEMS / SEMS Plus EU gateway API | Yes |
+| Mode | Chargers | How it works | Internet required |
+|------|----------|-------------|-------------------|
+| **Local Modbus TCP** | gen 2 only | Connects directly to the wallbox over your LAN using Modbus TCP | No |
+| **SEMS cloud** | gen 1, gen2 | Polls the SEMS / SEMS Plus EU gateway API | Yes |
 
 ---
 
@@ -41,7 +41,6 @@ Supports two independent connection modes:
 | Fault state | Sensor (Enum) | Aggregated ok / warning / fault with decoded bit attributes |
 | Phase A/B/C voltage | Sensor (V) | Per-phase AC voltage |
 | Phase A/B/C current | Sensor (A) | Per-phase AC current |
-| Total energy | Sensor (kWh) | Lifetime accumulated energy (register 10065) |
 | Max charge power | Number (kW) | Register 10029 limit (range depends on hardware model) |
 | Max session energy | Number (kWh) | Stop after delivering this energy (0 = unlimited) |
 | Min session energy | Number (kWh) | Keep charging until this energy is delivered |
@@ -57,8 +56,8 @@ All entities are translated -- Czech (`cs`) and English (`en`) are included.
 ## Requirements
 
 - Home Assistant 2023.6 or newer
-- GoodWe EV Charger (Wallbox Gen2)
-- For **Modbus mode**: wallbox reachable on your LAN, port 502 open
+- GoodWe EV Charger
+- For **Modbus mode**: wallbox reachable on your LAN, port 502 open, must be enabled in SolarGo
 - For **SEMS cloud mode**: SEMS / SEMS Plus account with the wallbox registered
 
 ---
@@ -90,10 +89,13 @@ The first step asks you to choose a connection type.
 
 This mode communicates directly with the wallbox over your local network. No cloud account is needed and it exposes more entities than the cloud mode.
 
+> It seems that only modbus or cloud can stay connected. if you find better solution, please contribute.
+
 ### Prerequisites
 
 - The wallbox must have a static IP address -- set a DHCP reservation in your router.
 - Port **502** must be reachable from Home Assistant.
+- TCP Modbus must be enabled in Communication menu of Solar Go - Wallbox.
 
 ### Setup steps
 
@@ -104,8 +106,8 @@ This mode communicates directly with the wallbox over your local network. No clo
 
 ### Finding the IP address
 
-- Your router's DHCP client list -- look for a device named `GOODWE` or with a GoodWe MAC prefix.
-- The GoodWe SEMS app (device details screen).
+- Your router's DHCP client list -- look for a device named `5011K......`.
+- The Solar Go Comunication menu.
 - A LAN scanner: `nmap -sn 192.168.1.0/24`.
 
 ---
@@ -116,7 +118,7 @@ This mode polls the SEMS / SEMS Plus EU gateway API. An internet connection and 
 
 ### Recommended: use a visitor account
 
-Create a **dedicated visitor account** in the SEMS app and use those credentials here:
+Create a **dedicated visitor account** in the SEMS app and use those credentials here (with grain of salt by AI):
 
 1. Open the **SEMS Plus** mobile app, log in with your **main** account.
 2. Go to your station (plant) → **Share** (or **Visitor Management**).
@@ -132,16 +134,10 @@ Create a **dedicated visitor account** in the SEMS app and use those credentials
 4. Confirm the detected wallbox (or enter the serial number manually if auto-detection fails).
 5. The integration stores the Plant ID and product model automatically.
 
-### Gen2 / HCA series chargers
-
-Chargers in the HCA product family (e.g. `GW7K-HCA-20`) use the SEMS Plus EU gateway for control commands. The integration handles this automatically -- no manual configuration needed.
-
-You can review or override the Plant ID and product model at any time via  
-**Settings → Devices & Services → GoodWe Wallbox → Configure**.
 
 ---
 
-## Update interval (cloud mode)
+## Update interval
 
 Default polling: **60 s** idle, **30 s** while charging. Adjust via  
 **Settings → Devices & Services → GoodWe Wallbox → Configure**.

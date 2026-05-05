@@ -41,7 +41,8 @@
         "error": {
             "cannot_connect": "Nepodařilo se připojit k SEMS portálu",
             "invalid_auth": "Neplatné přihlašovací údaje",
-            "unknown": "Neočekávaná chyba"
+            "unknown": "Neočekávaná chyba",
+            "no_chargers_found": "V daném plantu nebyly nalezeny žádné nabíječky EV. Zadejte sériové číslo ručně."
         },
         "step": {
             "user": {
@@ -101,9 +102,6 @@
                 }
             }
         }
-    },
-    "error": {
-        "no_chargers_found": "V daném plantu nebyly nalezeny žádné nabíječky EV. Zadejte sériové číslo ručně."
     },
     "entity": {
         "sensor": {

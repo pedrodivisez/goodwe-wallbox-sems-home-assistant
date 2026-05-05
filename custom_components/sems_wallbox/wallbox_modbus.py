@@ -102,7 +102,7 @@ class WallboxModbusClient:
     def _make_client(self):
         """Create and connect a fresh ModbusTcpClient. Caller must close it."""
         from pymodbus.client import ModbusTcpClient  # deferred to avoid hard dep at import
-        client = ModbusTcpClient(self._host, port=self._port, timeout=5)
+        client = ModbusTcpClient(self._host, port=self._port, timeout=2)
         if not client.connect():
             raise OSError(f"Cannot connect to wallbox Modbus at {self._host}:{self._port}")
         _LOGGER.debug("Modbus TCP connected to %s:%d", self._host, self._port)
@@ -474,5 +474,6 @@ class WallboxModbusClient:
             "modbus_pile_type": pile_type,
             "modbus_project_type": project_type,
             "modbus_ems_dispatch": ems_dispatch,
-            "modbus_charging_enabled": (charging_on_off == 2) if charging_on_off is not None else None,
+            # reg 10060 = 0 when plug-and-charge auto-started; use actual status instead
+            "modbus_charging_enabled": (raw_status == 3),
         }

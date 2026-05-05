@@ -52,7 +52,6 @@ async def async_setup_entry(
                 SemsModbusCurrentSensor(coordinator, sn, "a"),
                 SemsModbusCurrentSensor(coordinator, sn, "b"),
                 SemsModbusCurrentSensor(coordinator, sn, "c"),
-                SemsModbusEnergyTotalSensor(coordinator, sn),
                 SemsModbusStatusSensor(coordinator, sn),
                 SemsModbusCarConnectionSensor(coordinator, sn),
                 SemsModbusFaultSensor(coordinator, sn),

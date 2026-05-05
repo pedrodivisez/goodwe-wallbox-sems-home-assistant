@@ -45,3 +45,4 @@ home-assistant_v2.db-wal
 poznamky.txt
 HCA.G2.modbus.file.pdf
 test_modbus.py
+test_modbus_live.py

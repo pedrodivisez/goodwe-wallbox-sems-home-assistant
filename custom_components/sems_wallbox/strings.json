@@ -41,7 +41,8 @@
         "error": {
             "cannot_connect": "Failed to connect to SEMS portal",
             "invalid_auth": "Invalid authentication",
-            "unknown": "Unexpected error"
+            "unknown": "Unexpected error",
+            "no_chargers_found": "No EV chargers were found in the selected plant. Enter the serial number manually."
         },
         "step": {
             "user": {
@@ -101,9 +102,6 @@
                 }
             }
         }
-    },
-    "error": {
-        "no_chargers_found": "No EV chargers were found in the selected plant. Enter the serial number manually."
     },
     "entity": {
         "sensor": {
