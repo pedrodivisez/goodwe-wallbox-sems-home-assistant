@@ -243,6 +243,11 @@
             "modbus_phase_switch": {
                 "name": "Automatické přepínání fází"
             }
+        },
+        "button": {
+            "modbus_refresh": {
+                "name": "Obnovit"
+            }
         }
     }
 }

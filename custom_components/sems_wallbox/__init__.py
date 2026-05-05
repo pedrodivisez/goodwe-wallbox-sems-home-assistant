@@ -35,6 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
@@ -141,6 +142,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     )
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, {})
+        runtime = hass.data[DOMAIN].pop(entry.entry_id, {})
+        modbus_client = runtime.get("modbus_client")
+        if modbus_client is not None:
+            await hass.async_add_executor_job(modbus_client.close)
 
     return unload_ok

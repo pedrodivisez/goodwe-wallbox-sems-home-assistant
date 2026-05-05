@@ -8,6 +8,7 @@ Connection: Modbus TCP, port 502, device/unit ID 247 (0xF7).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
@@ -104,7 +105,11 @@ class WallboxModbusClient:
         client = ModbusTcpClient(self._host, port=self._port, timeout=5)
         if not client.connect():
             raise OSError(f"Cannot connect to wallbox Modbus at {self._host}:{self._port}")
+        _LOGGER.debug("Modbus TCP connected to %s:%d", self._host, self._port)
         return client
+
+    def close(self) -> None:
+        """No-op: connections are per-operation and auto-closed. Present for HA unload compatibility."""
 
     # ------------------------------------------------------------------
     # Low-level register read
@@ -134,8 +139,7 @@ class WallboxModbusClient:
         except OSError:
             return False
         try:
-            regs = self._read(client, _REG_STATUS, 1)
-            return regs is not None
+            return self._read(client, _REG_STATUS, 1) is not None
         finally:
             client.close()
 
@@ -155,6 +159,7 @@ class WallboxModbusClient:
             if result.isError():
                 _LOGGER.warning("Modbus write error at %d value=%d: %s", address, value, result)
                 return False
+            _LOGGER.debug("Modbus write reg=%d value=%d OK", address, value)
             return True
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Modbus write exception at %d: %s", address, exc)
@@ -248,27 +253,25 @@ class WallboxModbusClient:
     def read_all(self) -> dict[str, Any] | None:
         """Read all useful registers and return a normalized data dict.
 
+        A fresh TCP connection is made for each call and closed when done.
         Returns None on communication failure.
-        The returned dict contains:
-        - Fields compatible with the existing SEMS cloud coordinator schema
-          (sn, status, chargeMode, set_charge_power, ...).
-        - Additional modbus-specific fields prefixed with 'modbus_'.
-
-        The TCP connection is always closed after reading so that the wallbox's
-        limited embedded TCP stack is free for its own cloud / IoT connections.
         """
+        t0 = time.monotonic()
         try:
             client = self._make_client()
         except OSError as exc:
             _LOGGER.warning("Modbus connect failed: %s", exc)
             return None
         try:
-            return self._read_all_inner(client)
+            result = self._read_all_inner(client)
+            _LOGGER.debug("Modbus read_all completed in %.2fs", time.monotonic() - t0)
+            return result
         finally:
             client.close()
+            _LOGGER.debug("Modbus TCP closed")
 
     def _read_all_inner(self, client) -> dict[str, Any] | None:
-        """Internal implementation of read_all (connection already managed by caller)."""
+        """Internal implementation of read_all."""
         # Block 1: faults + voltages + currents + power + status (10000-10019)
         b1 = self._read(client, 10000, 20)
         if b1 is None:

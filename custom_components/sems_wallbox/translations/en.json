@@ -243,6 +243,11 @@
             "modbus_phase_switch": {
                 "name": "Auto phase switching"
             }
+        },
+        "button": {
+            "modbus_refresh": {
+                "name": "Refresh"
+            }
         }
     }
 }
