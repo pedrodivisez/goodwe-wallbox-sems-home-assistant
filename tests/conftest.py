@@ -46,6 +46,8 @@ if not hasattr(const_mod, "CONF_PASSWORD"):
     const_mod.CONF_USERNAME = "username"
     const_mod.CONF_SCAN_INTERVAL = "scan_interval"
     const_mod.CONF_URL = "url"
+    const_mod.CONF_HOST = "host"
+    const_mod.CONF_PORT = "port"
 
     class Platform:
         NUMBER = "number"
@@ -62,15 +64,25 @@ if not hasattr(const_mod, "CONF_PASSWORD"):
     class UnitOfElectricCurrent:
         AMPERE = "A"
 
+    class UnitOfElectricPotential:
+        VOLT = "V"
+
     class UnitOfTime:
         MINUTES = "min"
 
     const_mod.UnitOfElectricCurrent = UnitOfElectricCurrent
+    const_mod.UnitOfElectricPotential = UnitOfElectricPotential
 
     const_mod.Platform = Platform
     const_mod.UnitOfPower = UnitOfPower
     const_mod.UnitOfEnergy = UnitOfEnergy
     const_mod.UnitOfTime = UnitOfTime
+
+    class EntityCategory:
+        CONFIG = "config"
+        DIAGNOSTIC = "diagnostic"
+
+    const_mod.EntityCategory = EntityCategory
 
 # --------------------------------------------------------------------------
 # homeassistant.core
@@ -104,6 +116,7 @@ if not hasattr(sensor_mod, "SensorDeviceClass"):
         POWER = "power"
         ENERGY = "energy"
         CURRENT = "current"
+        VOLTAGE = "voltage"
     class SensorStateClass:
         TOTAL_INCREASING = "total_increasing"
         MEASUREMENT = "measurement"
@@ -138,6 +151,7 @@ number_mod = _register("homeassistant.components.number")
 if not hasattr(number_mod, "NumberDeviceClass"):
     class NumberDeviceClass:
         POWER = "power"
+        ENERGY = "energy"
     class NumberEntity:
         pass
     class NumberEntityDescription:

@@ -1,4 +1,4 @@
-"""The sems-wallbox integration."""
+"""The sems_wallbox integration."""
 
 from __future__ import annotations
 
@@ -6,15 +6,29 @@ import asyncio
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, CONF_PLANT_ID, CONF_PRODUCT_MODEL, CONF_STATION_ID
+from .const import (
+    DOMAIN,
+    CONF_PLANT_ID,
+    CONF_PRODUCT_MODEL,
+    CONF_STATION_ID,
+    CONF_CONNECTION_TYPE,
+    CONN_TYPE_MODBUS,
+    CONF_MODBUS_HOST,
+    CONF_MODBUS_PORT,
+    CONF_MODBUS_DEVICE_ID,
+    DEFAULT_MODBUS_PORT,
+    DEFAULT_MODBUS_DEVICE_ID,
+)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 from .sems_api import SemsApi
 from .coordinator import SemsUpdateCoordinator
+from .modbus_coordinator import ModbusUpdateCoordinator
+from .wallbox_modbus import WallboxModbusClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,6 +50,37 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up sems from a config entry."""
+    conn_type = entry.data.get(CONF_CONNECTION_TYPE, "cloud")
+
+    if conn_type == CONN_TYPE_MODBUS:
+        return await _async_setup_modbus(hass, entry)
+    return await _async_setup_cloud(hass, entry)
+
+
+async def _async_setup_modbus(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the integration using local Modbus TCP."""
+    host = entry.data[CONF_MODBUS_HOST]
+    port = int(entry.data.get(CONF_MODBUS_PORT, DEFAULT_MODBUS_PORT))
+    device_id = int(entry.data.get(CONF_MODBUS_DEVICE_ID, DEFAULT_MODBUS_DEVICE_ID))
+
+    client = WallboxModbusClient(host, port, device_id)
+    coordinator = ModbusUpdateCoordinator(hass, entry, client)
+
+    await coordinator.async_config_entry_first_refresh()
+
+    hass.data[DOMAIN][entry.entry_id] = {
+        "coordinator": coordinator,
+        "modbus_client": client,
+        "connection_type": CONN_TYPE_MODBUS,
+    }
+
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    return True
+
+
+async def _async_setup_cloud(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up the integration using the SEMS cloud API (original path)."""
     username = entry.data[CONF_USERNAME]
     password = entry.data[CONF_PASSWORD]
 
@@ -96,6 +141,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     )
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+        runtime = hass.data[DOMAIN].pop(entry.entry_id, {})
+        # Close Modbus TCP connection if open
+        modbus_client = runtime.get("modbus_client")
+        if modbus_client is not None:
+            await hass.async_add_executor_job(modbus_client.close)
 
     return unload_ok

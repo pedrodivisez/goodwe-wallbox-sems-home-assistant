@@ -28,7 +28,7 @@ build/
 .DS_Store
 Thumbs.db
 
-# Secrets / local config — never commit credentials
+# Secrets / local config -- never commit credentials
 secrets.yaml
 *.env
 .env
@@ -43,3 +43,5 @@ home-assistant_v2.db
 home-assistant_v2.db-shm
 home-assistant_v2.db-wal
 poznamky.txt
+HCA.G2.modbus.file.pdf
+test_modbus.py

@@ -8,7 +8,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, CONF_SCAN_INTERVAL
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME, CONF_SCAN_INTERVAL
 
 from .const import (
     DOMAIN,
@@ -16,6 +16,14 @@ from .const import (
     CONF_SCAN_INTERVAL_CHARGING,
     CONF_PLANT_ID,
     CONF_PRODUCT_MODEL,
+    CONF_CONNECTION_TYPE,
+    CONN_TYPE_CLOUD,
+    CONN_TYPE_MODBUS,
+    CONF_MODBUS_HOST,
+    CONF_MODBUS_PORT,
+    CONF_MODBUS_DEVICE_ID,
+    DEFAULT_MODBUS_PORT,
+    DEFAULT_MODBUS_DEVICE_ID,
     DEFAULT_SCAN_INTERVAL_IDLE,
     DEFAULT_SCAN_INTERVAL_CHARGING,
 )
@@ -30,6 +38,22 @@ _STEP_USER_SCHEMA = vol.Schema(
     }
 )
 
+_STEP_CONN_TYPE_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_CONNECTION_TYPE, default=CONN_TYPE_CLOUD): vol.In(
+            {CONN_TYPE_CLOUD: "Cloud API (SEMS Portal)", CONN_TYPE_MODBUS: "Local Modbus TCP (direct)"}
+        ),
+    }
+)
+
+_STEP_MODBUS_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_MODBUS_HOST): str,
+        vol.Optional(CONF_MODBUS_PORT, default=DEFAULT_MODBUS_PORT): int,
+        vol.Optional(CONF_MODBUS_DEVICE_ID, default=0): int,
+    }
+)
+
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for sems."""
@@ -39,6 +63,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialise flow state."""
+        self._connection_type: str = CONN_TYPE_CLOUD
         self._username: str = ""
         self._password: str = ""
         self._api: SemsApi | None = None
@@ -55,13 +80,93 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return OptionsFlowHandler()
 
     # ------------------------------------------------------------------
-    # Step 1: credentials
+    # Step 0: choose connection type (Cloud or Local Modbus)
     # ------------------------------------------------------------------
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Handle the initial step — just username + password."""
+        """Ask whether to use Cloud API or local Modbus."""
+        if user_input is not None:
+            self._connection_type = user_input[CONF_CONNECTION_TYPE]
+            if self._connection_type == CONN_TYPE_MODBUS:
+                return await self.async_step_modbus()
+            return await self.async_step_cloud_credentials()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=_STEP_CONN_TYPE_SCHEMA,
+            errors={},
+        )
+
+    # ------------------------------------------------------------------
+    # Step 1a: Local Modbus configuration
+    # ------------------------------------------------------------------
+
+    async def async_step_modbus(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Configure local Modbus TCP connection."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            host = user_input[CONF_MODBUS_HOST].strip()
+            port = int(user_input.get(CONF_MODBUS_PORT, DEFAULT_MODBUS_PORT))
+            device_id = int(user_input.get(CONF_MODBUS_DEVICE_ID, 0))
+
+            from .wallbox_modbus import WallboxModbusClient
+
+            # Auto-detect device ID when 0 is entered
+            if device_id == 0:
+                device_id = await self.hass.async_add_executor_job(
+                    WallboxModbusClient.detect_device_id, host, port
+                )
+                if device_id is None:
+                    errors["base"] = "cannot_connect"
+                    return self.async_show_form(
+                        step_id="modbus",
+                        data_schema=_STEP_MODBUS_SCHEMA,
+                        errors=errors,
+                    )
+
+            # Read all data to verify connection and get SN from device
+            client = WallboxModbusClient(host, port, device_id)
+            try:
+                result = await self.hass.async_add_executor_job(client.read_all)
+            except Exception:  # noqa: BLE001
+                result = None
+            finally:
+                await self.hass.async_add_executor_job(client.close)
+
+            if not result:
+                errors["base"] = "cannot_connect"
+            else:
+                sn = result.get("sn") or host
+                return self.async_create_entry(
+                    title=sn,
+                    data={
+                        CONF_CONNECTION_TYPE: CONN_TYPE_MODBUS,
+                        CONF_MODBUS_HOST: host,
+                        CONF_MODBUS_PORT: port,
+                        CONF_MODBUS_DEVICE_ID: device_id,
+                        CONF_STATION_ID: sn,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="modbus",
+            data_schema=_STEP_MODBUS_SCHEMA,
+            errors=errors,
+        )
+
+    # ------------------------------------------------------------------
+    # Step 1b: Cloud credentials (original first step, now step 1b)
+    # ------------------------------------------------------------------
+
+    async def async_step_cloud_credentials(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Handle cloud username + password."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -83,7 +188,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return await self.async_step_plant()
 
         return self.async_show_form(
-            step_id="user",
+            step_id="cloud_credentials",
             data_schema=_STEP_USER_SCHEMA,
             errors=errors,
         )
@@ -103,8 +208,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_charger()
 
         if not self._plant_options:
-            # First visit — fetch from EU gateway.
-            # Try centralized/page (EV_CHARGER) first — works for both owners and
+            # First visit -- fetch from EU gateway.
+            # Try centralized/page (EV_CHARGER) first -- works for both owners and
             # visitor/shared accounts.  Fall back to stations/page if needed.
             assert self._api is not None
             # Fetch all EV chargers across all plants (no stationId filter)
@@ -129,7 +234,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         self._plant_options[str(sid)] = str(name)
 
         if len(self._plant_options) == 0:
-            # EU gateway not available or no plants — skip to manual SN entry
+            # EU gateway not available or no plants -- skip to manual SN entry
             _LOGGER.info("SEMS config: no stations discovered, using manual entry")
             return await self.async_step_charger_manual()
 

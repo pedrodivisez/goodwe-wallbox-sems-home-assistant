@@ -1,4 +1,4 @@
-"""Unit tests for switch.py — SemsSwitch grace period logic."""
+"""Unit tests for switch.py -- SemsSwitch grace period logic."""
 
 import sys
 import os
@@ -11,7 +11,7 @@ import time
 # All HA stubs are set up by conftest.py before this file is collected.
 # ---------------------------------------------------------------------------
 
-_HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "sems-wallbox")
+_HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "sems_wallbox")
 
 # --------------------------------------------------------------------------
 # Make sure CoordinatorEntity in the stub accepts (coordinator) init arg
@@ -42,7 +42,8 @@ sys.modules[_pkg_name] = _pkg
 
 # const stub
 _const = types.ModuleType(f"{_pkg_name}.const")
-_const.DOMAIN = "sems-wallbox"
+_const.DOMAIN = "sems_wallbox"
+_const.CONN_TYPE_MODBUS = "modbus"
 sys.modules[f"{_pkg_name}.const"] = _const
 setattr(_pkg, "const", _const)
 
@@ -130,7 +131,7 @@ def _make_switch(data: dict, current_is_on: bool = False) -> SemsSwitch:
 
 
 # ===========================================================================
-# _compute_is_on_from_data — no grace (no command issued)
+# _compute_is_on_from_data -- no grace (no command issued)
 # ===========================================================================
 
 class TestComputeIsOnNoGrace:
@@ -147,12 +148,12 @@ class TestComputeIsOnNoGrace:
         assert sw._compute_is_on_from_data(CHARGING_DATA_GEN2) is True
 
     def test_gen2_standby_power_limit_returns_false(self):
-        # power=4.2 is the configured limit, not actual draw — must NOT be ON
+        # power=4.2 is the configured limit, not actual draw -- must NOT be ON
         sw = _make_switch(STANDBY_DATA_GEN2)
         assert sw._compute_is_on_from_data(STANDBY_DATA_GEN2) is False
 
     def test_no_start_status_falls_back_to_old_api(self):
-        # Gen1 data without startStatus — use status string
+        # Gen1 data without startStatus -- use status string
         data = {"sn": SAMPLE_SN, "status": "EVDetail_Status_Title_Charging", "power": 7.4}
         sw = _make_switch(data)
         assert sw._compute_is_on_from_data(data) is True
@@ -164,7 +165,7 @@ class TestComputeIsOnNoGrace:
 
 
 # ===========================================================================
-# _compute_is_on_from_data — within ON grace window
+# _compute_is_on_from_data -- within ON grace window
 # ===========================================================================
 
 class TestComputeIsOnGraceOn:
@@ -173,7 +174,7 @@ class TestComputeIsOnGraceOn:
         sw = _make_switch(STANDBY_DATA)
         now = time.monotonic()
         sw._last_command_target = True
-        sw._last_command_ts = now - 5  # 5 s ago — well within 130 s grace
+        sw._last_command_ts = now - 5  # 5 s ago -- well within 130 s grace
         sw.hass.loop.time.return_value = now
 
         assert sw._compute_is_on_from_data(STANDBY_DATA) is True
@@ -213,7 +214,7 @@ class TestComputeIsOnGraceOn:
 
 
 # ===========================================================================
-# _compute_is_on_from_data — within OFF grace window
+# _compute_is_on_from_data -- within OFF grace window
 # ===========================================================================
 
 class TestComputeIsOnGraceOff:
@@ -222,7 +223,7 @@ class TestComputeIsOnGraceOff:
         sw = _make_switch(CHARGING_DATA)
         now = time.monotonic()
         sw._last_command_target = False
-        sw._last_command_ts = now - 5  # 5 s ago — well within 130 s grace
+        sw._last_command_ts = now - 5  # 5 s ago -- well within 130 s grace
         sw.hass.loop.time.return_value = now
 
         assert sw._compute_is_on_from_data(CHARGING_DATA) is False
@@ -286,5 +287,5 @@ class TestSemsSwitchProperties:
     def test_device_info_has_identifiers(self):
         sw = _make_switch(CHARGING_DATA)
         info = sw.device_info
-        assert ("sems-wallbox", SAMPLE_SN) in info["identifiers"]
+        assert ("sems_wallbox", SAMPLE_SN) in info["identifiers"]
         assert info["manufacturer"] == "GoodWe"

@@ -1,4 +1,4 @@
-"""Unit tests for number.py — SemsNumber charge-power slider entity."""
+"""Unit tests for number.py -- SemsNumber charge-power slider entity."""
 
 import sys
 import os
@@ -15,7 +15,7 @@ import pytest
 _HERE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "custom_components",
-    "sems-wallbox",
+    "sems_wallbox",
 )
 
 # --------------------------------------------------------------------------
@@ -29,7 +29,8 @@ _pkg.__package__ = _pkg_name
 sys.modules[_pkg_name] = _pkg
 
 _const = types.ModuleType(f"{_pkg_name}.const")
-_const.DOMAIN = "sems-wallbox"
+_const.DOMAIN = "sems_wallbox"
+_const.CONN_TYPE_MODBUS = "modbus"
 sys.modules[f"{_pkg_name}.const"] = _const
 setattr(_pkg, "const", _const)
 
@@ -152,7 +153,7 @@ class TestAvailability:
         assert entity.available is True
 
     def test_available_in_pv_priority(self):
-        # Always available now — value shown as read-only, editable=False attribute
+        # Always available now -- value shown as read-only, editable=False attribute
         entity = _make_entity(chargeMode=1)
         assert entity.available is True
 

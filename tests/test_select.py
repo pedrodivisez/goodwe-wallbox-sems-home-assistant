@@ -1,4 +1,4 @@
-"""Unit tests for select.py — InverterOperationModeEntity."""
+"""Unit tests for select.py -- InverterOperationModeEntity."""
 
 import sys
 import os
@@ -12,7 +12,7 @@ import pytest
 # All HA stubs are set up by conftest.py before this file is collected.
 # ---------------------------------------------------------------------------
 
-_HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "sems-wallbox")
+_HERE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "custom_components", "sems_wallbox")
 
 # Add EntityCategory stub
 _const_mod = sys.modules["homeassistant.const"]
@@ -22,7 +22,7 @@ if not hasattr(_const_mod, "EntityCategory"):
     _const_mod.EntityCategory = EntityCategory
 
 # EntityCategory is also imported from homeassistant.const in select.py
-# but HA actually defines it in homeassistant.const — stub it there too
+# but HA actually defines it in homeassistant.const -- stub it there too
 import homeassistant.const as _ha_const
 if not hasattr(_ha_const, "EntityCategory"):
     class EntityCategory:
@@ -40,7 +40,8 @@ _pkg.__package__ = _pkg_name
 sys.modules[_pkg_name] = _pkg
 
 _const = types.ModuleType(f"{_pkg_name}.const")
-_const.DOMAIN = "sems-wallbox"
+_const.DOMAIN = "sems_wallbox"
+_const.CONN_TYPE_MODBUS = "modbus"
 sys.modules[f"{_pkg_name}.const"] = _const
 setattr(_pkg, "const", _const)
 
@@ -281,7 +282,7 @@ class TestSelectOption:
 
         await entity.async_select_option("fast")
 
-        # Only the original Fast call — no re-fire because _pending_mode=1 != mode=0
+        # Only the original Fast call -- no re-fire because _pending_mode=1 != mode=0
         assert len(calls) == 1
         assert calls[0] == (SAMPLE_SN, 0, 6.0)
         # No refresh scheduled either
@@ -318,7 +319,7 @@ class TestSelectOption:
 
         await entity.async_select_option("fast")
 
-        # Only the original Fast call — no re-fire because chargeMode is now 1
+        # Only the original Fast call -- no re-fire because chargeMode is now 1
         assert len(calls) == 1
         entity.hass.async_create_task.assert_not_called()
 
@@ -443,7 +444,7 @@ class TestPendingMode:
         entity.coordinator.data[SAMPLE_SN]["chargeMode"] = 0
         entity._handle_coordinator_update()
 
-        # Grace period expired — pending cleared, option updated from poll data
+        # Grace period expired -- pending cleared, option updated from poll data
         assert entity._pending_mode is None
         assert entity._attr_current_option == "fast"
 

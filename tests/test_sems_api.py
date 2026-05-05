@@ -37,7 +37,7 @@ sys.modules.setdefault("custom_components.sems_wallbox", pkg_wallbox)
 # Now import the module under test
 import importlib.util, os
 
-_HERE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "custom_components", "sems-wallbox")
+_HERE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "custom_components", "sems_wallbox")
 spec = importlib.util.spec_from_file_location("sems_api", os.path.join(_HERE, "sems_api.py"))
 sems_api_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sems_api_module)

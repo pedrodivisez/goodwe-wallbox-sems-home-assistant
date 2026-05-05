@@ -1,4 +1,4 @@
-"""Unit tests for sensor.py — SemsSensor and SemsWorkStateSensor."""
+"""Unit tests for sensor.py -- SemsSensor and SemsWorkStateSensor."""
 
 import sys
 import os
@@ -105,7 +105,7 @@ _ensure_ha_stubs()
 # Import the modules under test
 # ---------------------------------------------------------------------------
 
-_HERE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "custom_components", "sems-wallbox")
+_HERE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "custom_components", "sems_wallbox")
 
 
 def _load_module(name, filepath):
@@ -127,7 +127,8 @@ sys.modules["coordinator"] = coord_stub
 
 # const stub
 const_stub = types.ModuleType("const")
-const_stub.DOMAIN = "sems-wallbox"
+const_stub.DOMAIN = "sems_wallbox"
+const_stub.CONN_TYPE_MODBUS = "modbus"
 sys.modules["const"] = const_stub
 
 # Patch relative imports inside sensor.py
@@ -171,7 +172,7 @@ SAMPLE_DATA = {
     "max_charge_power": 11,
     "set_charge_power": 7.4,
     "startStatus": True,
-    # From getLastCharge — workStu=6 means actively charging
+    # From getLastCharge -- workStu=6 means actively charging
     "last_charge_work_status": 6,
     "last_charge_power": 7.4,
     "last_charge_duration_minutes": 42,
@@ -266,7 +267,7 @@ class TestSemsSensor:
         coord = _make_coordinator()
         sensor = SemsSensor(coord, SAMPLE_SN)
         info = sensor.device_info
-        assert ("sems-wallbox", SAMPLE_SN) in info["identifiers"]
+        assert ("sems_wallbox", SAMPLE_SN) in info["identifiers"]
         assert info["manufacturer"] == "GoodWe"
         assert info["model"] == "AC Charger Pro"
         assert info["sw_version"] == "1.2.3"
@@ -285,7 +286,7 @@ class TestSemsWorkStateSensor:
         return SemsWorkStateSensor(coord, SAMPLE_SN)
 
     def test_workstu_charging_returns_connected(self):
-        # When workStu=6 (actively charging), car is definitely connected — override unreliable detail API.
+        # When workStu=6 (actively charging), car is definitely connected -- override unreliable detail API.
         d = {**SAMPLE_DATA, "workstate": "available_gun_no_insered", "last_charge_work_status": 6}
         coord = _make_coordinator(d)
         s = SemsWorkStateSensor(coord, SAMPLE_SN)
@@ -327,7 +328,7 @@ class TestSemsWorkStateSensor:
     def test_device_info(self):
         s = self._sensor("EVDetail_Status_Waiting_Stat00")
         info = s.device_info
-        assert ("sems-wallbox", SAMPLE_SN) in info["identifiers"]
+        assert ("sems_wallbox", SAMPLE_SN) in info["identifiers"]
         assert info["manufacturer"] == "GoodWe"
 
 

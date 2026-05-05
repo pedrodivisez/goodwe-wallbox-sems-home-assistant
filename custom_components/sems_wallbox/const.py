@@ -1,6 +1,6 @@
 """Constants for the sems integration."""
 
-DOMAIN = "sems-wallbox"
+DOMAIN = "sems_wallbox"
 
 import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
@@ -15,6 +15,18 @@ CONF_PRODUCT_MODEL = "product_model"  # Gen2: device model string e.g. GW7K-HCA-
 DEFAULT_SCAN_INTERVAL = 20  # timedelta(seconds=20)
 DEFAULT_SCAN_INTERVAL_IDLE = 60       # seconds, when not charging
 DEFAULT_SCAN_INTERVAL_CHARGING = 30   # seconds, when actively charging
+
+# Connection type selector
+CONF_CONNECTION_TYPE = "connection_type"
+CONN_TYPE_CLOUD = "cloud"
+CONN_TYPE_MODBUS = "modbus"
+
+# Modbus TCP connection settings
+CONF_MODBUS_HOST = "modbus_host"
+CONF_MODBUS_PORT = "modbus_port"
+CONF_MODBUS_DEVICE_ID = "modbus_device_id"
+DEFAULT_MODBUS_PORT = 502
+DEFAULT_MODBUS_DEVICE_ID = 247  # 0xF7 -- empirically discovered for GoodWe AC Wallbox Gen2
 
 # Validation of the user's configuration
 SEMS_CONFIG_SCHEMA = vol.Schema(

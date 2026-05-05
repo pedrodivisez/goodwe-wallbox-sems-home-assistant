@@ -78,7 +78,7 @@ class SemsUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the SEMS API."""
         try:
-            # Always try EU gateway first — get_data_gen2 falls back to getData()
+            # Always try EU gateway first -- get_data_gen2 falls back to getData()
             # automatically on any EU gateway failure, so this is safe for both
             # Gen1 and Gen2, and for visitor accounts that may not have plant_id.
             result = await self._hass.async_add_executor_job(
