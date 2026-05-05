@@ -153,6 +153,8 @@ class WallboxModbusClient:
             return regs is not None
         except Exception:  # noqa: BLE001
             return False
+        finally:
+            self.close()
 
     # ------------------------------------------------------------------
     # Write helpers
@@ -169,8 +171,9 @@ class WallboxModbusClient:
             return True
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Modbus write exception at %d: %s", address, exc)
-            self.close()
             return False
+        finally:
+            self.close()
 
     def write_start_stop(self, start: bool) -> bool:
         """Start (True) or stop (False) charging. Reg 10060: 2=start, 1=stop."""
