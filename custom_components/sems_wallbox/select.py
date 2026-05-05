@@ -344,9 +344,10 @@ class ModbusChargeModeSelect(CoordinatorEntity, SelectEntity):
     _attr_should_poll = False
     _attr_has_entity_name = True
     _attr_translation_key = "modbus_charge_mode"
-    _attr_options = list(_MODE_TO_OPTION.values())
     _attr_entity_category = EntityCategory.CONFIG
 
+    _ALL_OPTIONS = list(_MODE_TO_OPTION.values())
+    _FAST_ONLY = ["fast"]
     _PENDING_TIMEOUT = 30.0
 
     def __init__(self, coordinator, sn: str, client) -> None:
@@ -372,6 +373,15 @@ class ModbusChargeModeSelect(CoordinatorEntity, SelectEntity):
     @property
     def available(self) -> bool:
         return self.coordinator.last_update_success
+
+    @property
+    def options(self) -> list[str]:
+        """Return available options -- PV modes only when inverter is connected (bit 2)."""
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        comm_status = data.get("modbus_comm_status", 0) or 0
+        if comm_status & 0x04:  # bit 2: inverter connected
+            return self._ALL_OPTIONS
+        return self._FAST_ONLY
 
     @property
     def current_option(self) -> str | None:

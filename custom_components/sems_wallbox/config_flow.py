@@ -135,8 +135,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 result = await self.hass.async_add_executor_job(client.read_all)
             except Exception:  # noqa: BLE001
                 result = None
-            finally:
-                await self.hass.async_add_executor_job(client.close)
 
             if not result:
                 errors["base"] = "cannot_connect"

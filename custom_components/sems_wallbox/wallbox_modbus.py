@@ -93,44 +93,26 @@ class WallboxModbusClient:
         self._host = host
         self._port = port
         self._device_id = device_id
-        self._client = None
 
     # ------------------------------------------------------------------
     # Connection management
     # ------------------------------------------------------------------
 
-    def _get_client(self):
-        """Return a connected ModbusTcpClient, reconnecting if needed."""
+    def _make_client(self):
+        """Create and connect a fresh ModbusTcpClient. Caller must close it."""
         from pymodbus.client import ModbusTcpClient  # deferred to avoid hard dep at import
-        if self._client is None or not self._client.is_socket_open():
-            if self._client is not None:
-                try:
-                    self._client.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            self._client = ModbusTcpClient(self._host, port=self._port, timeout=5)
-            if not self._client.connect():
-                self._client = None
-                raise OSError(f"Cannot connect to wallbox Modbus at {self._host}:{self._port}")
-        return self._client
-
-    def close(self) -> None:
-        """Close the Modbus TCP connection."""
-        if self._client is not None:
-            try:
-                self._client.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._client = None
+        client = ModbusTcpClient(self._host, port=self._port, timeout=5)
+        if not client.connect():
+            raise OSError(f"Cannot connect to wallbox Modbus at {self._host}:{self._port}")
+        return client
 
     # ------------------------------------------------------------------
     # Low-level register read
     # ------------------------------------------------------------------
 
-    def _read(self, address: int, count: int) -> list[int] | None:
+    def _read(self, client, address: int, count: int) -> list[int] | None:
         """Read `count` holding registers starting at `address`."""
         try:
-            client = self._get_client()
             result = client.read_holding_registers(address, count=count,
                                                    device_id=self._device_id)
             if result.isError():
@@ -139,7 +121,6 @@ class WallboxModbusClient:
             return list(result.registers)
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Modbus read exception at %d: %s", address, exc)
-            self.close()  # force reconnect next time
             return None
 
     # ------------------------------------------------------------------
@@ -149,12 +130,14 @@ class WallboxModbusClient:
     def test_connection(self) -> bool:
         """Return True if the wallbox responds to a minimal register read."""
         try:
-            regs = self._read(_REG_STATUS, 1)
-            return regs is not None
-        except Exception:  # noqa: BLE001
+            client = self._make_client()
+        except OSError:
             return False
+        try:
+            regs = self._read(client, _REG_STATUS, 1)
+            return regs is not None
         finally:
-            self.close()
+            client.close()
 
     # ------------------------------------------------------------------
     # Write helpers
@@ -163,7 +146,11 @@ class WallboxModbusClient:
     def _write(self, address: int, value: int) -> bool:
         """Write a single holding register (function code 6)."""
         try:
-            client = self._get_client()
+            client = self._make_client()
+        except OSError as exc:
+            _LOGGER.warning("Modbus connect failed for write at %d: %s", address, exc)
+            return False
+        try:
             result = client.write_register(address, value, device_id=self._device_id)
             if result.isError():
                 _LOGGER.warning("Modbus write error at %d value=%d: %s", address, value, result)
@@ -173,7 +160,7 @@ class WallboxModbusClient:
             _LOGGER.warning("Modbus write exception at %d: %s", address, exc)
             return False
         finally:
-            self.close()
+            client.close()
 
     def write_start_stop(self, start: bool) -> bool:
         """Start (True) or stop (False) charging. Reg 10060: 2=start, 1=stop."""
@@ -271,30 +258,35 @@ class WallboxModbusClient:
         limited embedded TCP stack is free for its own cloud / IoT connections.
         """
         try:
-            return self._read_all_inner()
+            client = self._make_client()
+        except OSError as exc:
+            _LOGGER.warning("Modbus connect failed: %s", exc)
+            return None
+        try:
+            return self._read_all_inner(client)
         finally:
-            self.close()
+            client.close()
 
-    def _read_all_inner(self) -> dict[str, Any] | None:
+    def _read_all_inner(self, client) -> dict[str, Any] | None:
         """Internal implementation of read_all (connection already managed by caller)."""
         # Block 1: faults + voltages + currents + power + status (10000-10019)
-        b1 = self._read(10000, 20)
+        b1 = self._read(client, 10000, 20)
         if b1 is None:
             return None
 
         # Block 2: config (10020-10039)
-        b2 = self._read(10020, 20)
+        b2 = self._read(client, 10020, 20)
 
         # Block 3: SN + versions + power spec + type (10040-10059)
-        b3 = self._read(10040, 20)
+        b3 = self._read(client, 10040, 20)
         if b3 is None:
             return None
 
         # Block 4: runtime (10060-10079)
-        b4 = self._read(10060, 20)
+        b4 = self._read(client, 10060, 20)
 
         # Block 5: CP state + SEMS account (10084-10108), green/grid energy, source
-        b5 = self._read(10084, 26)
+        b5 = self._read(client, 10084, 26)
 
         # -- Parse block 1 --
         ems_dispatch = b1[0]

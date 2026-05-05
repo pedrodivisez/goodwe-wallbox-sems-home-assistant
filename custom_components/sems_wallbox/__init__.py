@@ -141,10 +141,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     )
     if unload_ok:
-        runtime = hass.data[DOMAIN].pop(entry.entry_id, {})
-        # Close Modbus TCP connection if open
-        modbus_client = runtime.get("modbus_client")
-        if modbus_client is not None:
-            await hass.async_add_executor_job(modbus_client.close)
+        hass.data[DOMAIN].pop(entry.entry_id, {})
 
     return unload_ok
