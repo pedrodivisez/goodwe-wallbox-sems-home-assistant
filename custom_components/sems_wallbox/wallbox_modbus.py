@@ -205,6 +205,14 @@ class WallboxModbusClient:
         """Enable/disable dynamic load management. Reg 10025."""
         return self._write(10025, 1 if enabled else 0)
 
+    def write_phase_switch(self, single_phase: bool) -> bool:
+        """Enable/disable single-phase mode. Reg 10023: 1=single-phase, 0=three-phase.
+
+        Only meaningful for three-phase (11/22 kW) wallboxes.
+        Enabling single-phase allows charging from 1.4 kW instead of the 4.2 kW minimum.
+        """
+        return self._write(10023, 1 if single_phase else 0)
+
     def write_max_charge_capacity(self, kwh: float) -> bool:
         """Set max charge capacity per session (energy limit) in kWh. Reg 10027, SF=10."""
         raw = max(0, min(2000, int(round(kwh * 10))))
@@ -255,7 +263,17 @@ class WallboxModbusClient:
         - Fields compatible with the existing SEMS cloud coordinator schema
           (sn, status, chargeMode, set_charge_power, ...).
         - Additional modbus-specific fields prefixed with 'modbus_'.
+
+        The TCP connection is always closed after reading so that the wallbox's
+        limited embedded TCP stack is free for its own cloud / IoT connections.
         """
+        try:
+            return self._read_all_inner()
+        finally:
+            self.close()
+
+    def _read_all_inner(self) -> dict[str, Any] | None:
+        """Internal implementation of read_all (connection already managed by caller)."""
         # Block 1: faults + voltages + currents + power + status (10000-10019)
         b1 = self._read(10000, 20)
         if b1 is None:

@@ -178,6 +178,9 @@
                     "warning": "Varování",
                     "fault": "Porucha"
                 }
+            },
+            "modbus_comm_status": {
+                "name": "Stav připojení"
             }
         },
         "select": {
@@ -236,6 +239,9 @@
             },
             "modbus_ems_dispatch": {
                 "name": "EMS minimální výkon"
+            },
+            "modbus_phase_switch": {
+                "name": "Automatické přepínání fází"
             }
         }
     }

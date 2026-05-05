@@ -45,6 +45,7 @@ async def async_setup_entry(
             entities.append(ModbusPlugChargeSwitch(coordinator, sn, client))
             entities.append(ModbusDynamicLoadMgmtSwitch(coordinator, sn, client))
             entities.append(ModbusEmsDispatchSwitch(coordinator, sn, client))
+            entities.append(ModbusPhaseSwitchSwitch(coordinator, sn, client))
         async_add_entities(entities)
         return
 
@@ -533,3 +534,36 @@ class ModbusEmsDispatchSwitch(_ModbusSwitch):
 
     def _do_write(self, state: bool) -> bool:
         return self._client.write_ems_dispatch(state)
+
+
+class ModbusPhaseSwitchSwitch(_ModbusSwitch):
+    """Enable / disable automatic single/three-phase switching (reg 10023).
+
+    When enabled, the wallbox firmware automatically switches between single and
+    three-phase operation based on available power. Only available on three-phase
+    units (11 kW and 22 kW). The minimum settable charge power stays at 4.2 kW
+    per the protocol spec; the firmware handles phase selection internally.
+    """
+
+    _attr_translation_key = "modbus_phase_switch"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_phase_switch"
+
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        # pile_type 0 = three-phase; 1 = single-phase (switch meaningless on single-phase)
+        pile_type = data.get("modbus_pile_type")
+        return pile_type == 0
+
+    def _api_state(self) -> bool:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return bool(data.get("modbus_phase_switch_enabled", False))
+
+    def _do_write(self, state: bool) -> bool:
+        return self._client.write_phase_switch(state)

@@ -56,6 +56,7 @@ async def async_setup_entry(
                 SemsModbusStatusSensor(coordinator, sn),
                 SemsModbusCarConnectionSensor(coordinator, sn),
                 SemsModbusFaultSensor(coordinator, sn),
+                SemsModbusCommStatusSensor(coordinator, sn),
             ])
 
     async_add_entities(entities)
@@ -833,4 +834,75 @@ class SemsModbusFaultSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self):
+        return _device_info(self.coordinator, self.sn)
+
+
+# Bit labels for register 10018 — Communication Connection Status
+_COMM_STATUS_BITS = {
+    0: "wifi",
+    1: "iot_cloud",
+    2: "inverter",
+    3: "mid_meter",
+    4: "gw_meter",
+    5: "ems",
+}
+
+_COMM_STATUS_LABELS = {
+    "wifi": "Wi-Fi",
+    "iot_cloud": "IoT cloud",
+    "inverter": "Inverter",
+    "mid_meter": "MID meter",
+    "gw_meter": "GW meter",
+    "ems": "EMS",
+}
+
+
+class SemsModbusCommStatusSensor(CoordinatorEntity, SensorEntity):
+    """Communication connection status sensor (register 10018).
+
+    Reports the number of active connections as state.
+    Individual connection bits are exposed as extra_state_attributes.
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "modbus_comm_status"
+    _attr_icon = "mdi:network"
+    _attr_native_unit_of_measurement = None
+    _attr_state_class = None
+
+    def __init__(self, coordinator, sn: str) -> None:
+        super().__init__(coordinator)
+        self.sn = sn
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_comm_status"
+
+    @property
+    def native_value(self):
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        raw = data.get("modbus_comm_status")
+        if raw is None:
+            return None
+        active = sum(1 for bit in _COMM_STATUS_BITS if raw & (1 << bit))
+        return active
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        raw = data.get("modbus_comm_status")
+        if raw is None:
+            return {}
+        attrs = {"raw": raw}
+        for bit, key in _COMM_STATUS_BITS.items():
+            attrs[key] = bool(raw & (1 << bit))
+        return attrs
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def device_info(self) -> dict:
         return _device_info(self.coordinator, self.sn)

@@ -178,6 +178,9 @@
                     "warning": "Warning",
                     "fault": "Fault"
                 }
+            },
+            "modbus_comm_status": {
+                "name": "Connection status"
             }
         },
         "select": {
@@ -236,6 +239,9 @@
             },
             "modbus_ems_dispatch": {
                 "name": "EMS minimum power mode"
+            },
+            "modbus_phase_switch": {
+                "name": "Auto phase switching"
             }
         }
     }
