@@ -521,10 +521,6 @@ class SemsModbusVoltageSensor(CoordinatorEntity, SensorEntity):
         return f"{self.sn}_modbus_voltage_{self._phase}"
 
     @property
-    def name(self) -> str:
-        return f"Phase {self._phase} Voltage"
-
-    @property
     def native_value(self) -> float | None:
         data = self.coordinator.data.get(self.sn, {}) or {}
         v = data.get(self._field)
@@ -558,10 +554,6 @@ class SemsModbusCurrentSensor(CoordinatorEntity, SensorEntity):
     @property
     def unique_id(self) -> str:
         return f"{self.sn}_modbus_current_{self._phase}"
-
-    @property
-    def name(self) -> str:
-        return f"Phase {self._phase} Current"
 
     @property
     def native_value(self) -> float | None:
