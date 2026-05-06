@@ -173,7 +173,7 @@ pytest tests/ -v
 
 ## Changelog
 
-### 1.5.0
+### 2.0.0
 - **Local Modbus TCP mode**: connect directly to the wallbox without cloud or internet
   - Auto-detects Modbus device ID (scans common IDs, GoodWe Gen2 uses 247/0xF7)
   - 10 writable registers: start/stop, charge mode, max power, session energy limits, battery SOC threshold, Plug&Charge, dynamic load management, EMS dispatch
