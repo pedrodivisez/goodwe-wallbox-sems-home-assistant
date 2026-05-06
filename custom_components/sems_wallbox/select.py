@@ -50,6 +50,7 @@ async def async_setup_entry(
         entities = []
         for sn in coordinator.data:
             entities.append(ModbusChargeModeSelect(coordinator, sn, client))
+            entities.append(ModbusChargeDurationSelect(coordinator, sn, client))
         async_add_entities(entities)
         return
 
@@ -412,6 +413,95 @@ class ModbusChargeModeSelect(CoordinatorEntity, SelectEntity):
         if not ok:
             _LOGGER.warning("ModbusChargeModeSelect %s: write failed, reverting", self.sn)
             self._pending_mode = None
+            self.async_write_ha_state()
+        else:
+            self.coordinator.schedule_delayed_refresh(3.0)
+
+
+# ---------------------------------------------------------------------------
+# Modbus charge duration (completion time) select — reg 10031
+# ---------------------------------------------------------------------------
+
+_DURATION_OPTIONS = ["asap", "1h", "2h", "3h", "4h", "5h", "6h"]
+_DURATION_TO_HOURS: dict[str, int] = {opt: i for i, opt in enumerate(_DURATION_OPTIONS)}
+_HOURS_TO_DURATION: dict[int, str] = {i: opt for i, opt in enumerate(_DURATION_OPTIONS)}
+
+
+class ModbusChargeDurationSelect(CoordinatorEntity, SelectEntity):
+    """Completion time selector via Modbus (reg 10031: 0=ASAP, 1-6=hours).
+
+    Active only in PV priority (mode 1) and PV+battery (mode 2).
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "modbus_charge_duration"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_options = _DURATION_OPTIONS
+    _PENDING_TIMEOUT = 30.0
+
+    def __init__(self, coordinator, sn: str, client) -> None:
+        super().__init__(coordinator)
+        self.sn = sn
+        self._client = client
+        self._pending_value: str | None = None
+        self._pending_until: float = 0.0
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_charge_duration"
+
+    @property
+    def device_info(self):
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return {
+            "identifiers": {(DOMAIN, self.sn)},
+            "name": data.get("name") or f"GoodWe Wallbox {self.sn}",
+            "manufacturer": "GoodWe",
+        }
+
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return data.get("chargeMode") in (1, 2)  # PV priority and PV+battery
+
+    @property
+    def current_option(self) -> str | None:
+        now = time.monotonic()
+        if self._pending_value is not None:
+            if now >= self._pending_until:
+                self._pending_value = None
+            else:
+                data = self.coordinator.data.get(self.sn, {}) or {}
+                api_raw = data.get("modbus_completion_time")
+                if api_raw is not None and _HOURS_TO_DURATION.get(int(api_raw)) == self._pending_value:
+                    self._pending_value = None
+                else:
+                    return self._pending_value
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        v = data.get("modbus_completion_time")
+        if v is None:
+            return None
+        return _HOURS_TO_DURATION.get(int(v))
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in _DURATION_TO_HOURS:
+            _LOGGER.warning("Unknown charge duration option: %s", option)
+            return
+        hours = _DURATION_TO_HOURS[option]
+        self._pending_value = option
+        self._pending_until = time.monotonic() + self._PENDING_TIMEOUT
+        self.async_write_ha_state()
+        ok = await self.hass.async_add_executor_job(self._client.write_completion_time, hours)
+        if not ok:
+            _LOGGER.warning("ModbusChargeDurationSelect %s: write failed, reverting", self.sn)
+            self._pending_value = None
             self.async_write_ha_state()
         else:
             self.coordinator.schedule_delayed_refresh(3.0)

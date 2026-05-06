@@ -197,6 +197,18 @@
                     "pv_priority": "PV priority",
                     "pv_and_battery": "PV & battery"
                 }
+            },
+            "modbus_charge_duration": {
+                "name": "Charge duration",
+                "state": {
+                    "asap": "ASAP",
+                    "1h": "1 hour",
+                    "2h": "2 hours",
+                    "3h": "3 hours",
+                    "4h": "4 hours",
+                    "5h": "5 hours",
+                    "6h": "6 hours"
+                }
             }
         },
         "number": {

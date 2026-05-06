@@ -222,6 +222,10 @@ class WallboxModbusClient:
         """Set battery discharge SOC threshold in %. Reg 10030, range [0,100]."""
         return self._write(10030, max(0, min(100, int(pct))))
 
+    def write_completion_time(self, hours: int) -> bool:
+        """Set completion time in hours (reg 10031). 0 = ASAP, 1-6 = hours."""
+        return self._write(10031, max(0, min(10, int(hours))))
+
     @staticmethod
     def detect_device_id(host: str, port: int = DEFAULT_MODBUS_PORT) -> int | None:
         """Scan common Modbus unit IDs and return the first that responds.
@@ -326,6 +330,7 @@ class WallboxModbusClient:
         max_power_raw = b2[9] if b2 else None
         max_power = max_power_raw / 10.0 if max_power_raw else None
         bat_soc_limit = b2[10] if b2 else None
+        completion_time = b2[11] if b2 else None
         charging_mode = b2[12] if b2 else 0
 
         # -- Parse block 3 (device info) --
@@ -466,6 +471,7 @@ class WallboxModbusClient:
             "modbus_min_capacity": min_cap,
             "modbus_max_capacity": max_cap,
             "modbus_bat_soc_limit": bat_soc_limit,
+            "modbus_completion_time": completion_time,
             "modbus_breaker_current": breaker_current,
             "modbus_hw_version": hw_version,
             "modbus_sw_version": sw_version,

@@ -388,6 +388,13 @@ class ModbusMaxChargePowerNumber(_ModbusNumber):
     def _do_write(self, value: float) -> bool:
         return self._client.write_max_charge_power(value)
 
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return data.get("chargeMode") == 0  # Fast mode only
+
 
 class ModbusMaxChargeCapacityNumber(_ModbusNumber):
     """Max session energy limit in kWh (reg 10027, SF=10). 0 = unlimited."""
@@ -436,6 +443,13 @@ class ModbusMinChargeCapacityNumber(_ModbusNumber):
     def _do_write(self, value: float) -> bool:
         return self._client.write_min_charge_capacity(value)
 
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return data.get("chargeMode") in (1, 2)  # PV and PV+battery modes
+
 
 class ModbusBatteryDischargeSocNumber(_ModbusNumber):
     """Battery discharge SOC threshold in % (reg 10030). Used in PV+battery mode."""
@@ -456,7 +470,7 @@ class ModbusBatteryDischargeSocNumber(_ModbusNumber):
         if not self.coordinator.last_update_success:
             return False
         data = self.coordinator.data.get(self.sn, {}) or {}
-        return data.get("chargeMode") == 2  # PV + battery mode only
+        return data.get("chargeMode") in (0, 2)  # Fast and PV+battery modes
 
     def _api_value(self) -> float | None:
         data = self.coordinator.data.get(self.sn, {}) or {}

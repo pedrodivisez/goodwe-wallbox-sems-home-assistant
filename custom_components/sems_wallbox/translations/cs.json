@@ -197,6 +197,18 @@
                     "pv_priority": "PV Priorita",
                     "pv_and_battery": "PV a baterie"
                 }
+            },
+            "modbus_charge_duration": {
+                "name": "Doba nabíjení",
+                "state": {
+                    "asap": "Co nejdříve",
+                    "1h": "1 hodina",
+                    "2h": "2 hodiny",
+                    "3h": "3 hodiny",
+                    "4h": "4 hodiny",
+                    "5h": "5 hodin",
+                    "6h": "6 hodin"
+                }
             }
         },
         "number": {
