@@ -36,9 +36,14 @@ Supports two independent connection modes:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Charging station status | Sensor (Enum) | Detailed 12-state status from register 10017 |
+| Charging station status | Sensor (Enum) | Detailed 12-state status from register 10017; attributes: all fault/warning register bits decoded |
 | Car connection | Sensor (Enum) | Plug / CP state (disconnected / half-connected / connected) |
 | Fault state | Sensor (Enum) | Aggregated ok / warning / fault with decoded bit attributes |
+| Communication status | Sensor | Active connections (Wi-Fi, IoT cloud, inverter, meters, EMS) |
+| Charge start mode | Sensor (Enum, diag) | How the session was started: Plug&Charge, backend, auth card, VIN... (reg 10076) |
+| Charging strategy | Sensor (Enum, diag) | Auto full / fill by time / fixed amount / by energy (reg 10077) |
+| Reservation | Sensor (Enum, diag) | Whether a scheduled reservation is active (reg 10079) |
+| Power source | Sensor (Enum, diag) | Energy source during charging: grid / PV / battery / combinations (reg 10108) |
 | Phase A/B/C voltage | Sensor (V) | Per-phase AC voltage |
 | Phase A/B/C current | Sensor (A) | Per-phase AC current |
 | Max charge power | Number (kW) | Register 10029 limit (range depends on hardware model) |

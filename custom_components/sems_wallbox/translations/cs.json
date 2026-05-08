@@ -140,7 +140,7 @@
             "modbus_charging_status": {
                 "name": "Stav nabíjecí stanice",
                 "state": {
-                    "idle_no_plug": "Neaktivní (nepripojen kabel)",
+                    "idle_no_plug": "Neaktivní (nepřipojen kabel)",
                     "idle_plugged": "Neaktivní (kabel zapojen)",
                     "handshaking": "Navazování spojení",
                     "charging": "Nabíjení",
@@ -148,7 +148,7 @@
                     "abnormal_alarm": "Porucha / alarm",
                     "scheduled_start": "Plánovaný start",
                     "maintenance": "Údržba",
-                    "start_failed": "Spustní se nezdařilo",
+                    "start_failed": "Spuštění se nezdařilo",
                     "upgrading": "Aktualizace firmware",
                     "interrupted": "Přerušeno",
                     "unknown": "Neznámý"
@@ -157,9 +157,9 @@
             "modbus_car_connection": {
                 "name": "Stav připojení vozidla",
                 "state": {
-                    "disconnected": "Odpojen",
-                    "half_connected": "Poločně zapojen (nezamknut)",
-                    "connected": "Zapojen",
+                    "disconnected": "Odpojeno",
+                    "half_connected": "Polozapojeno (zamknuto)",
+                    "connected": "Zapojeno",
                     "unknown": "Neznámý"
                 }
             },
@@ -179,6 +179,51 @@
             },
             "modbus_comm_status": {
                 "name": "Stav připojení"
+            },
+            "modbus_start_mode": {
+                "name": "Způsob spuštění nabíjení",
+                "state": {
+                    "auth_card": "Autorizační karta",
+                    "backend": "Backend",
+                    "local_admin": "Lokální správce",
+                    "vin": "VIN",
+                    "wallet_card": "Platební karta",
+                    "plug_and_charge": "Plug & Charge",
+                    "scheduled": "Naplánováno",
+                    "bluetooth": "Bluetooth",
+                    "unknown": "Neznámý"
+                }
+            },
+            "modbus_charging_strategy": {
+                "name": "Strategie nabíjení",
+                "state": {
+                    "auto_full": "Automaticky (plné nabití)",
+                    "fill_by_time": "Nabít do času",
+                    "fixed_amount": "Pevná energie",
+                    "charge_by_energy": "Nabít na energii",
+                    "unknown": "Neznámá"
+                }
+            },
+            "modbus_appointment_sign": {
+                "name": "Rezervace",
+                "state": {
+                    "no_reservation": "Bez rezervace",
+                    "reserved": "Rezervováno"
+                }
+            },
+            "modbus_power_source_sensor": {
+                "name": "Zdroj energie",
+                "state": {
+                    "none": "Žádný",
+                    "grid": "Síť",
+                    "pv": "FVE",
+                    "battery": "Baterie",
+                    "grid_pv": "Síť + FVE",
+                    "grid_battery": "Síť + baterie",
+                    "pv_battery": "FVE + baterie",
+                    "grid_pv_battery": "Síť + FVE + baterie",
+                    "unknown": "Neznámý"
+                }
             }
         },
         "select": {

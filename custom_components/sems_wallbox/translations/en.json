@@ -179,6 +179,51 @@
             },
             "modbus_comm_status": {
                 "name": "Connection status"
+            },
+            "modbus_start_mode": {
+                "name": "Charge start mode",
+                "state": {
+                    "auth_card": "Auth card",
+                    "backend": "Backend",
+                    "local_admin": "Local admin",
+                    "vin": "VIN",
+                    "wallet_card": "Wallet card",
+                    "plug_and_charge": "Plug & Charge",
+                    "scheduled": "Scheduled",
+                    "bluetooth": "Bluetooth",
+                    "unknown": "Unknown"
+                }
+            },
+            "modbus_charging_strategy": {
+                "name": "Charging strategy",
+                "state": {
+                    "auto_full": "Auto (full charge)",
+                    "fill_by_time": "Fill by time",
+                    "fixed_amount": "Fixed amount",
+                    "charge_by_energy": "Charge by energy",
+                    "unknown": "Unknown"
+                }
+            },
+            "modbus_appointment_sign": {
+                "name": "Reservation",
+                "state": {
+                    "no_reservation": "No reservation",
+                    "reserved": "Reserved"
+                }
+            },
+            "modbus_power_source_sensor": {
+                "name": "Power source",
+                "state": {
+                    "none": "None",
+                    "grid": "Grid",
+                    "pv": "PV",
+                    "battery": "Battery",
+                    "grid_pv": "Grid + PV",
+                    "grid_battery": "Grid + battery",
+                    "pv_battery": "PV + battery",
+                    "grid_pv_battery": "Grid + PV + battery",
+                    "unknown": "Unknown"
+                }
             }
         },
         "select": {

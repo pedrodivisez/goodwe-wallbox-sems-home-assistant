@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfEnergy, UnitOfPower, UnitOfTime
+from homeassistant.const import EntityCategory, UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfEnergy, UnitOfPower, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -56,6 +56,10 @@ async def async_setup_entry(
                 SemsModbusCarConnectionSensor(coordinator, sn),
                 SemsModbusFaultSensor(coordinator, sn),
                 SemsModbusCommStatusSensor(coordinator, sn),
+                SemsModbusStartModeSensor(coordinator, sn),
+                SemsModbusChargingStrategySensor(coordinator, sn),
+                SemsModbusAppointmentSensor(coordinator, sn),
+                SemsModbusPowerSourceSensor(coordinator, sn),
             ])
 
     async_add_entities(entities)
@@ -638,10 +642,29 @@ class SemsModbusStatusSensor(CoordinatorEntity, SensorEntity):
         attrs = {}
         if (v := data.get("modbus_status_raw")) is not None:
             attrs["status_raw"] = v
-        for key in ("modbus_fault_01", "modbus_fault_02", "modbus_fault_03",
-                    "modbus_warn_05", "modbus_power_source", "modbus_comm_status"):
+        for key in (
+            "modbus_ems_dispatch",
+            "modbus_fault_01", "modbus_fault_02", "modbus_fault_03", "modbus_fault_04",
+            "modbus_warn_05", "modbus_warn_06",
+            "modbus_hw_fault_07", "modbus_hw_fault_08",
+            "modbus_comm_status", "modbus_power_source",
+        ):
             if (v := data.get(key)) is not None:
                 attrs[key] = v
+        # Decoded fault / warning bits
+        for reg_key, bit_names, label in (
+            ("modbus_fault_01", _AC_FAULT_01_BITS, "faults_01"),
+            ("modbus_fault_02", _AC_FAULT_02_BITS, "faults_02"),
+            ("modbus_fault_03", _AC_FAULT_03_BITS, "faults_03"),
+            ("modbus_hw_fault_07", _HW_FAULT_07_BITS, "hw_faults_07"),
+            ("modbus_warn_05", _WARN_05_BITS, "warnings_05"),
+            ("modbus_warn_06", _WARN_06_BITS, "warnings_06"),
+        ):
+            raw = data.get(reg_key)
+            if raw:
+                active = _decode_bits(raw, bit_names)
+                if active:
+                    attrs[label] = active
         return attrs
 
     @property
@@ -697,57 +720,61 @@ class SemsModbusCarConnectionSensor(CoordinatorEntity, SensorEntity):
         return _device_info(self.coordinator, self.sn)
 
 
-# Bit-field descriptions for fault / warning registers
+# Bit-field descriptions for fault / warning registers  (per protocol V1.0.15)
 _AC_FAULT_01_BITS = {
     0: "Emergency stop",
     1: "AC overvoltage",
     2: "AC overcurrent",
     3: "AC undervoltage",
-    4: "AC frequency fault",
-    5: "AC loss of phase",
-    6: "Contactor fault",
-    7: "Meter communication fault",
-    8: "Proximity pilot fault",
-    9: "Control pilot fault",
+    4: "Connector fault",
+    5: "S2 disconnected",
+    6: "Environment overtemp",
+    7: "Gun overtemp",
 }
 
 _AC_FAULT_02_BITS = {
-    0: "Door fault",
-    1: "Ground fault",
-    2: "Relay fault",
-    3: "PLC communication fault",
-    4: "Interlock fault",
-    5: "Lock fault",
-    6: "Lock feedback fault",
-    7: "Output short circuit",
+    0: "Door access fault",
+    1: "Grounding fault",
+    2: "Handshake timeout",
+    3: "RF card comm fault",
+    4: "Serial display comm fault",
+    5: "On-board meter IC comm fault",
+    6: "Output relay fault",
+    7: "Gun lock fault",
 }
 
 _AC_FAULT_03_BITS = {
-    0: "Leakage fault",
-    1: "Insufficient power",
-    2: "Power limit fault",
+    0: "Output short circuit",
+    1: "Leakage current",
+    2: "Charge pause >10 min",
+    3: "Abnormal meter reading",
+    4: "Charger offline on PV/battery start",
+    5: "Insufficient PV/battery power",
 }
 
 _HW_FAULT_07_BITS = {
     0: "External flash fault",
     1: "EEPROM fault",
-    2: "Leakage detection board fault",
-    3: "SN not registered",
-    4: "RTC fault",
+    2: "Leak detection device fault",
+    3: "Abnormal input power",
+    4: "SN not registered",
+    5: "Factory parameters abnormal",
+    6: "Unauthorized firmware",
 }
 
 _WARN_05_BITS = {
-    0: "Gun overheat",
-    1: "Ground alarm",
-    2: "RFID communication alarm",
-    3: "AC overvoltage alarm",
-    4: "AC undervoltage alarm",
-    5: "AC overcurrent alarm",
-    6: "AC frequency alarm",
+    0: "Gun overtemp alarm",
+    1: "Grounding alarm",
+    2: "Handshake timeout alarm",
+    3: "RF card comm alarm",
+    4: "Serial display comm alarm",
+    5: "On-board meter IC comm alarm",
+    6: "Charging stop alarm",
+    7: "Abnormal meter reading alarm",
 }
 
 _WARN_06_BITS = {
-    0: "Environment overheat alarm",
+    0: "Environment overtemp alarm",
 }
 
 
@@ -825,6 +852,179 @@ class SemsModbusFaultSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self):
+        return _device_info(self.coordinator, self.sn)
+
+
+# ---------------------------------------------------------------------------
+# Charge start mode (reg 10076), charging strategy (reg 10077),
+# appointment sign (reg 10079), power source (reg 10108)
+# ---------------------------------------------------------------------------
+
+_START_MODE_MAP: dict[int, str] = {
+    0: "auth_card",
+    1: "backend",
+    2: "local_admin",
+    3: "vin",
+    4: "wallet_card",
+    5: "plug_and_charge",
+    6: "scheduled",
+    7: "bluetooth",
+}
+
+_CHARGING_STRATEGY_MAP: dict[int, str] = {
+    0: "auto_full",
+    1: "fill_by_time",
+    2: "fixed_amount",
+    3: "charge_by_energy",
+}
+
+_POWER_SOURCE_MAP: dict[int, str] = {
+    0x00: "none",
+    0x01: "grid",
+    0x02: "pv",
+    0x03: "grid_pv",
+    0x04: "battery",
+    0x05: "grid_battery",
+    0x06: "pv_battery",
+    0x07: "grid_pv_battery",
+}
+
+
+class SemsModbusStartModeSensor(CoordinatorEntity, SensorEntity):
+    """How the current / last charge session was started (reg 10076)."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(_START_MODE_MAP.values()) + ["unknown"]
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "modbus_start_mode"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, sn: str) -> None:
+        super().__init__(coordinator)
+        self.sn = sn
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_start_mode"
+
+    @property
+    def native_value(self) -> str:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        v = data.get("modbus_start_mode")
+        if v is None:
+            return "unknown"
+        return _START_MODE_MAP.get(v, "unknown")
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def device_info(self) -> dict:
+        return _device_info(self.coordinator, self.sn)
+
+
+class SemsModbusChargingStrategySensor(CoordinatorEntity, SensorEntity):
+    """Active charging strategy (reg 10077: 0=auto full, 1=by time, 2=fixed amount, 3=by energy)."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(_CHARGING_STRATEGY_MAP.values()) + ["unknown"]
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "modbus_charging_strategy"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, sn: str) -> None:
+        super().__init__(coordinator)
+        self.sn = sn
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_charging_strategy"
+
+    @property
+    def native_value(self) -> str:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        v = data.get("modbus_charging_strategy")
+        if v is None:
+            return "unknown"
+        return _CHARGING_STRATEGY_MAP.get(v, "unknown")
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def device_info(self) -> dict:
+        return _device_info(self.coordinator, self.sn)
+
+
+class SemsModbusAppointmentSensor(CoordinatorEntity, SensorEntity):
+    """Reservation (appointment) active flag (reg 10079: 0=none, 1=reservation valid)."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["no_reservation", "reserved"]
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "modbus_appointment_sign"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, sn: str) -> None:
+        super().__init__(coordinator)
+        self.sn = sn
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_appointment_sign"
+
+    @property
+    def native_value(self) -> str:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        v = data.get("modbus_appointment_sign")
+        return "reserved" if v else "no_reservation"
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def device_info(self) -> dict:
+        return _device_info(self.coordinator, self.sn)
+
+
+class SemsModbusPowerSourceSensor(CoordinatorEntity, SensorEntity):
+    """Active power source during charging (reg 10108: bit0=grid, bit1=PV, bit2=battery)."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(_POWER_SOURCE_MAP.values()) + ["unknown"]
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "modbus_power_source_sensor"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator, sn: str) -> None:
+        super().__init__(coordinator)
+        self.sn = sn
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_power_source"
+
+    @property
+    def native_value(self) -> str:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        v = data.get("modbus_power_source")
+        if v is None:
+            return "unknown"
+        return _POWER_SOURCE_MAP.get(v & 0x07, "unknown")
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def device_info(self) -> dict:
         return _device_info(self.coordinator, self.sn)
 
 

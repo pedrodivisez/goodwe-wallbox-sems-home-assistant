@@ -363,7 +363,7 @@ class SemsMinimumPowerSwitch(CoordinatorEntity, SwitchEntity):
 # Modbus-specific switch entities (local Modbus TCP mode only)
 # ---------------------------------------------------------------------------
 
-_MODBUS_PENDING_TIMEOUT = 30.0
+_MODBUS_PENDING_TIMEOUT = 90.0
 
 
 class _ModbusSwitch(CoordinatorEntity, SwitchEntity):
@@ -448,9 +448,6 @@ class ModbusStartStopSwitch(_ModbusSwitch):
     def _api_state(self) -> bool:
         data = self.coordinator.data.get(self.sn, {}) or {}
         v = data.get("modbus_charging_enabled")
-        # Fallback: status==3 (charging) implies on
-        if v is None:
-            return (data.get("modbus_status_raw") == 3)
         return bool(v)
 
     def _do_write(self, state: bool) -> bool:

@@ -8,6 +8,7 @@ Connection: Modbus TCP, port 502, device/unit ID 247 (0xF7).
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -94,6 +95,11 @@ class WallboxModbusClient:
         self._host = host
         self._port = port
         self._device_id = device_id
+        # Serialise all Modbus TCP operations -- the wallbox only supports 2
+        # simultaneous connections (1 = cloud IoT, 1 = HA).  Without a lock,
+        # a coordinator read_all and a user-triggered write can open two
+        # connections at the same time, causing one to be rejected.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Connection management
@@ -120,10 +126,10 @@ class WallboxModbusClient:
         try:
             result = client.read_holding_registers(address, count=count,
                                                    device_id=self._device_id)
-            if result.isError():
-                _LOGGER.warning("Modbus read error at %d count=%d: %s", address, count, result)
-                return None
-            return list(result.registers)
+            if not result.isError():
+                return list(result.registers)
+            _LOGGER.warning("Modbus read error at %d count=%d: %s", address, count, result)
+            return None
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Modbus read exception at %d: %s", address, exc)
             return None
@@ -149,23 +155,24 @@ class WallboxModbusClient:
 
     def _write(self, address: int, value: int) -> bool:
         """Write a single holding register (function code 6)."""
-        try:
-            client = self._make_client()
-        except OSError as exc:
-            _LOGGER.warning("Modbus connect failed for write at %d: %s", address, exc)
-            return False
-        try:
-            result = client.write_register(address, value, device_id=self._device_id)
-            if result.isError():
-                _LOGGER.warning("Modbus write error at %d value=%d: %s", address, value, result)
+        with self._lock:
+            try:
+                client = self._make_client()
+            except OSError as exc:
+                _LOGGER.warning("Modbus connect failed for write at %d: %s", address, exc)
                 return False
-            _LOGGER.debug("Modbus write reg=%d value=%d OK", address, value)
-            return True
-        except Exception as exc:  # noqa: BLE001
-            _LOGGER.warning("Modbus write exception at %d: %s", address, exc)
-            return False
-        finally:
-            client.close()
+            try:
+                result = client.write_register(address, value, device_id=self._device_id)
+                if result.isError():
+                    _LOGGER.warning("Modbus write error at %d value=%d: %s", address, value, result)
+                    return False
+                _LOGGER.debug("Modbus write reg=%d value=%d OK", address, value)
+                return True
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning("Modbus write exception at %d: %s", address, exc)
+                return False
+            finally:
+                client.close()
 
     def write_start_stop(self, start: bool) -> bool:
         """Start (True) or stop (False) charging. Reg 10060: 2=start, 1=stop."""
@@ -261,18 +268,19 @@ class WallboxModbusClient:
         Returns None on communication failure.
         """
         t0 = time.monotonic()
-        try:
-            client = self._make_client()
-        except OSError as exc:
-            _LOGGER.warning("Modbus connect failed: %s", exc)
-            return None
-        try:
-            result = self._read_all_inner(client)
-            _LOGGER.debug("Modbus read_all completed in %.2fs", time.monotonic() - t0)
-            return result
-        finally:
-            client.close()
-            _LOGGER.debug("Modbus TCP closed")
+        with self._lock:
+            try:
+                client = self._make_client()
+            except OSError as exc:
+                _LOGGER.warning("Modbus connect failed: %s", exc)
+                return None
+            try:
+                result = self._read_all_inner(client)
+                _LOGGER.debug("Modbus read_all completed in %.2fs", time.monotonic() - t0)
+                return result
+            finally:
+                client.close()
+                _LOGGER.debug("Modbus TCP closed")
 
     def _read_all_inner(self, client) -> dict[str, Any] | None:
         """Internal implementation of read_all."""
@@ -291,6 +299,8 @@ class WallboxModbusClient:
 
         # Block 4: runtime (10060-10079)
         b4 = self._read(client, 10060, 20)
+        if b4 is None:
+            return None
 
         # Block 5: CP state + SEMS account (10084-10108), green/grid energy, source
         b5 = self._read(client, 10084, 26)
@@ -343,23 +353,17 @@ class WallboxModbusClient:
         pile_type = b3[19]
 
         # -- Parse block 4 (runtime) --
-        if b4:
-            charging_on_off = b4[0]   # 1=off, 2=on (reg 10060)
-            charge_duration_s = _decode_u32(b4[3], b4[4])
-            hist_energy_raw = _decode_u32(b4[5], b4[6])
-            hist_energy = hist_energy_raw / 10.0
-            pile_time_ym = b4[7]
-            pile_time_dh = b4[8]
-            pile_time_ms = b4[9]
-            car_connection = b4[15] if len(b4) > 15 else None
-            start_mode = b4[16] if len(b4) > 16 else None
-        else:
-            charging_on_off = None
-            charge_duration_s = 0
-            hist_energy = 0.0
-            pile_time_ym = pile_time_dh = pile_time_ms = 0
-            car_connection = None
-            start_mode = None
+        charging_on_off = b4[0]   # 1=off, 2=on (reg 10060)
+        charge_duration_s = _decode_u32(b4[3], b4[4])
+        hist_energy_raw = _decode_u32(b4[5], b4[6])
+        hist_energy = hist_energy_raw / 10.0
+        pile_time_ym = b4[7]
+        pile_time_dh = b4[8]
+        pile_time_ms = b4[9]
+        car_connection = b4[15]
+        start_mode = b4[16]
+        charging_strategy = b4[17]
+        appointment_sign = b4[19]
 
         # -- Parse block 5 (extras) --
         cp_state = None
@@ -480,6 +484,8 @@ class WallboxModbusClient:
             "modbus_pile_type": pile_type,
             "modbus_project_type": project_type,
             "modbus_ems_dispatch": ems_dispatch,
-            # reg 10060 = 0 when plug-and-charge auto-started; use actual status instead
-            "modbus_charging_enabled": (raw_status == 3),
+            "modbus_charging_enabled": (charging_on_off == 2),
+            "modbus_start_mode": start_mode,
+            "modbus_charging_strategy": charging_strategy,
+            "modbus_appointment_sign": appointment_sign,
         }
