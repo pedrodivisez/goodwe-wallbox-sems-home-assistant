@@ -437,7 +437,12 @@ class _ModbusSwitch(CoordinatorEntity, SwitchEntity):
 
 
 class ModbusStartStopSwitch(_ModbusSwitch):
-    """Start / stop charging via Modbus (reg 10060: 2=on, 1=off)."""
+    """Start / stop charging via Modbus (reg 10060: 2=on, 1=off).
+
+    Shows ON when charging was started either by HA (on_off=2) or by Plug & Charge /
+    auto-start (on_off=0), so the user can turn it OFF to stop an ongoing P&C session.
+    Becomes unavailable when no car is connected (reg 10075 == 0).
+    """
 
     _attr_translation_key = "modbus_start_charging"
 
@@ -445,10 +450,18 @@ class ModbusStartStopSwitch(_ModbusSwitch):
     def unique_id(self) -> str:
         return f"{self.sn}_modbus_start_stop"
 
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return bool(data.get("modbus_car_connected", 0))
+
     def _api_state(self) -> bool:
         data = self.coordinator.data.get(self.sn, {}) or {}
-        v = data.get("modbus_charging_enabled")
-        return bool(v)
+        # on_off=0: P&C / auto-start (not set by HA), on_off=2: HA started, on_off=1: HA stopped
+        on_off = data.get("modbus_charging_on_off")
+        return on_off != 1
 
     def _do_write(self, state: bool) -> bool:
         return self._client.write_start_stop(state)

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,7 +110,6 @@ class WallboxModbusClient:
         client = ModbusTcpClient(self._host, port=self._port, timeout=2)
         if not client.connect():
             raise OSError(f"Cannot connect to wallbox Modbus at {self._host}:{self._port}")
-        _LOGGER.debug("Modbus TCP connected to %s:%d", self._host, self._port)
         return client
 
     def close(self) -> None:
@@ -267,7 +265,6 @@ class WallboxModbusClient:
         A fresh TCP connection is made for each call and closed when done.
         Returns None on communication failure.
         """
-        t0 = time.monotonic()
         with self._lock:
             try:
                 client = self._make_client()
@@ -275,12 +272,9 @@ class WallboxModbusClient:
                 _LOGGER.warning("Modbus connect failed: %s", exc)
                 return None
             try:
-                result = self._read_all_inner(client)
-                _LOGGER.debug("Modbus read_all completed in %.2fs", time.monotonic() - t0)
-                return result
+                return self._read_all_inner(client)
             finally:
                 client.close()
-                _LOGGER.debug("Modbus TCP closed")
 
     def _read_all_inner(self, client) -> dict[str, Any] | None:
         """Internal implementation of read_all."""
@@ -484,6 +478,8 @@ class WallboxModbusClient:
             "modbus_pile_type": pile_type,
             "modbus_project_type": project_type,
             "modbus_ems_dispatch": ems_dispatch,
+            # reg 10060: 2=charging enabled by HA command, 1=off, 0=not set (e.g. Plug&Charge)
+            "modbus_charging_on_off": charging_on_off,
             "modbus_charging_enabled": (charging_on_off == 2),
             "modbus_start_mode": start_mode,
             "modbus_charging_strategy": charging_strategy,

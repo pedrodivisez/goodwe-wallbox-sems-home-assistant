@@ -82,8 +82,16 @@ class ModbusUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed("Could not determine SN from Modbus data")
 
         data: dict[str, Any] = {sn: result}
-        _LOGGER.debug("Modbus coordinator fetched data for %s: status=%s power=%s",
-                      sn, result.get("modbus_status_name"), result.get("modbus_power"))
+        _LOGGER.debug(
+            "Modbus %s: status=%s power=%.1f on_off=%s car=%s cp=%s start=%s",
+            sn,
+            result.get("modbus_status_name"),
+            result.get("modbus_power") or 0.0,
+            result.get("modbus_charging_on_off"),
+            result.get("modbus_car_connected"),
+            result.get("modbus_cp_state_name"),
+            result.get("modbus_start_mode"),
+        )
 
         # Dynamic polling: faster while actively charging
         is_charging = result.get("modbus_status_raw") == 3
