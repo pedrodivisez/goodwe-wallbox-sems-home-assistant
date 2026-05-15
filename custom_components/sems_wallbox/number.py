@@ -358,6 +358,7 @@ class ModbusMaxChargePowerNumber(_ModbusNumber):
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
     _attr_native_step = 0.1
     _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = "slider"
 
     @property
     def unique_id(self) -> str:
@@ -372,9 +373,30 @@ class ModbusMaxChargePowerNumber(_ModbusNumber):
             return 4.2, 11.0
         return 1.4, 7.0
 
+    def _min_power_from_voltage(self) -> float | None:
+        """Calculate minimum power from live voltage readings at 6 A per phase.
+
+        Returns None if voltages are not yet available (e.g. first poll).
+        Rounds up to the nearest 0.1 kW so we never go below the true minimum.
+        """
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        ua = data.get("modbus_voltage_a")
+        if ua is None or ua < 100:  # implausible / not yet read
+            return None
+        # single-phase: only phase A matters
+        if data.get("modbus_pile_type") == 1:
+            min_kw = ua * 6 / 1000.0
+        else:
+            ub = data.get("modbus_voltage_b") or ua
+            uc = data.get("modbus_voltage_c") or ua
+            min_kw = (ua + ub + uc) * 6 / 1000.0
+        # round up to nearest 0.1 kW
+        return round(min_kw + 0.049, 1)
+
     @property
     def native_min_value(self) -> float:
-        return self._power_limits()[0]
+        v = self._min_power_from_voltage()
+        return v if v is not None else self._power_limits()[0]
 
     @property
     def native_max_value(self) -> float:
