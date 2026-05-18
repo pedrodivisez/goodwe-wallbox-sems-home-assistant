@@ -23,6 +23,10 @@ from .const import (
     CONF_MODBUS_DEVICE_ID,
     DEFAULT_MODBUS_PORT,
     DEFAULT_MODBUS_DEVICE_ID,
+    CONF_PILE_GENERATION,
+    CONF_RATED_POWER,
+    CONF_DASHBOARD_FUNCTIONS,
+    CONF_MORE_DEVICE_CONTROLS,
 )
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 from .sems_api import SemsApi
@@ -114,9 +118,43 @@ async def _async_setup_cloud(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
+    # Build capabilities dict from stored config entry data
+    capabilities: dict = {
+        "pile_generation": entry.data.get(CONF_PILE_GENERATION, ""),
+        "rated_power": entry.data.get(CONF_RATED_POWER),
+        "dashboard_functions": list(entry.data.get(CONF_DASHBOARD_FUNCTIONS) or []),
+        "more_device_controls": list(entry.data.get(CONF_MORE_DEVICE_CONTROLS) or []),
+    }
+
+    # Backward compatibility: if capabilities weren't stored at config time (old entry),
+    # fetch them from the API now. The web token is already valid from the first refresh.
+    if not capabilities["dashboard_functions"] and not capabilities["more_device_controls"]:
+        station_id = entry.data.get(CONF_STATION_ID, "")
+        if station_id:
+            _LOGGER.debug(
+                "SEMS setup: capabilities not in entry data, fetching from API for %s",
+                station_id,
+            )
+            info = await hass.async_add_executor_job(api.fetch_device_info, station_id)
+            if info:
+                capabilities["pile_generation"] = str(info.get("pileGeneration") or "")
+                capabilities["rated_power"] = info.get("ratedPower")
+                capabilities["dashboard_functions"] = list(info.get("dashboardFunctions") or [])
+                capabilities["more_device_controls"] = list(info.get("moreDeviceControls") or [])
+
+    _LOGGER.debug(
+        "SEMS setup: capabilities for %s: gen=%s rated=%s dashboard=%s more=%s",
+        entry.data.get(CONF_STATION_ID),
+        capabilities["pile_generation"],
+        capabilities["rated_power"],
+        capabilities["dashboard_functions"],
+        capabilities["more_device_controls"],
+    )
+
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
         "coordinator": coordinator,
+        "capabilities": capabilities,
     }
 
     # Reload on options change (e.g. scan_interval)

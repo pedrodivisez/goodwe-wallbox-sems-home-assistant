@@ -152,6 +152,7 @@ if not hasattr(number_mod, "NumberDeviceClass"):
     class NumberDeviceClass:
         POWER = "power"
         ENERGY = "energy"
+        CURRENT = "current"
     class NumberEntity:
         pass
     class NumberEntityDescription:

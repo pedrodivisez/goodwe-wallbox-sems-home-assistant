@@ -10,13 +10,13 @@ from homeassistant.components.number import (
     NumberEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfEnergy, UnitOfPower
+from homeassistant.const import EntityCategory, UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONN_TYPE_MODBUS
+from .const import DOMAIN, CONN_TYPE_MODBUS, CAP_OUTPUT_POWER_SETTING, CAP_DYNAMIC_LOAD_CONTROL
 from .coordinator import SemsUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,10 +42,13 @@ async def async_setup_entry(
             entities.append(ModbusMaxChargeCapacityNumber(coordinator, sn, client))
             entities.append(ModbusMinChargeCapacityNumber(coordinator, sn, client))
             entities.append(ModbusBatteryDischargeSocNumber(coordinator, sn, client))
+            entities.append(ModbusCurrentLimitNumber(coordinator, sn, client))
         async_add_entities(entities)
         return
 
     api = runtime["api"]
+    caps = runtime.get("capabilities", {})
+    more_controls = caps.get("more_device_controls", [])
 
     _LOGGER.debug(
         "Setting up SemsNumber entities (version %s) for entry %s",
@@ -56,7 +59,18 @@ async def async_setup_entry(
     entities: list[SemsNumber] = []
     for sn, data in coordinator.data.items():
         set_charge_power = data.get("set_charge_power")
-        entities.append(SemsNumber(coordinator, sn, api, set_charge_power))
+        # Charge power slider: show when Output_Power_Setting is listed OR cap list is empty
+        if not more_controls or CAP_OUTPUT_POWER_SETTING in more_controls:
+            entities.append(SemsNumber(coordinator, sn, api, set_charge_power))
+        # Mode-param numbers: available when in the relevant mode (mode 0/2)
+        entities.append(SemsMaxEnergyNumber(coordinator, sn, api))
+        entities.append(SemsTargetSocNumber(coordinator, sn, api))
+        entities.append(SemsMinEnergyNumber(coordinator, sn, api))
+        # Output power limit: part of Dynamic Load Management
+        if CAP_DYNAMIC_LOAD_CONTROL in more_controls:
+            entities.append(SemsOutputPowerLimitNumber(coordinator, sn, api))
+        # Current limit: always add (virtually all wallboxes support it)
+        entities.append(SemsCurrentLimitNumber(coordinator, sn, api))
 
     async_add_entities(entities)
 
@@ -162,14 +176,11 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
 
     @property
     def available(self) -> bool:
-        """Always available -- entity is editable only in Fast mode (chargeMode=0)."""
-        return self.coordinator.last_update_success
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        """Expose whether the slider is currently editable."""
+        """Available only in Fast mode (chargeMode=0) -- the entity controls Fast-mode power."""
+        if not self.coordinator.last_update_success:
+            return False
         data = self.coordinator.data.get(self.sn, {}) or {}
-        return {"editable": data.get("chargeMode", 0) == 0}
+        return data.get("chargeMode", 0) == 0
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -281,6 +292,341 @@ class SemsNumber(CoordinatorEntity, NumberEntity):
         # set-mode can take up to 90s to return, then device needs more time to apply.
         # Poll 60s after set-mode returns (total from user action up to ~150s).
         self.coordinator.schedule_delayed_refresh(60)
+
+
+class SemsOutputPowerLimitNumber(CoordinatorEntity, NumberEntity):
+    """Cloud entity for the global output power limit (kW) via set-config.
+
+    Part of the Dynamic Load Management feature. The API field is
+    ``ratedMaxiChargePower`` in both the detail response and the set-config call.
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "output_power_limit"
+    _attr_device_class = NumberDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_native_min_value = 1.4
+    _attr_native_step = 0.1
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = "slider"
+
+    _PENDING_TIMEOUT = 60.0
+
+    def __init__(self, coordinator: SemsUpdateCoordinator, sn: str, api) -> None:
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self.sn = sn
+        self.api = api
+        self._pending_value: float | None = None
+        self._pending_until: float = 0.0
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-number-output-power-limit"
+
+    @property
+    def device_info(self):
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return {
+            "identifiers": {(DOMAIN, self.sn)},
+            "name": data.get("name") or f"GoodWe Wallbox {self.sn}",
+            "manufacturer": "GoodWe",
+        }
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def native_max_value(self) -> float:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        for key in ("hw_max_charge_power", "max_charge_power", "rated_max_charge_power"):
+            v = data.get(key)
+            try:
+                if v is not None:
+                    return float(v)
+            except (TypeError, ValueError):
+                pass
+        return 22.0
+
+    @property
+    def native_value(self) -> float | None:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        api_raw = data.get("rated_max_charge_power")
+        try:
+            api_val = float(api_raw) if api_raw is not None else None
+        except (TypeError, ValueError):
+            api_val = None
+        now = time.monotonic()
+        if self._pending_value is not None:
+            if now >= self._pending_until:
+                self._pending_value = None
+            elif api_val is not None and abs(api_val - self._pending_value) < 0.5:
+                self._pending_value = None
+            else:
+                return self._pending_value
+        return api_val
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self.async_write_ha_state()
+
+    async def async_set_native_value(self, value: float) -> None:
+        self._pending_value = value
+        self._pending_until = time.monotonic() + self._PENDING_TIMEOUT
+        self.async_write_ha_state()
+        ok = await self.hass.async_add_executor_job(
+            lambda: self.api.set_config_gen2(self.sn, ratedMaxiChargePower=round(value, 1))
+        )
+        if not ok:
+            _LOGGER.warning("SemsOutputPowerLimitNumber %s: set_config failed", self.sn)
+            self._pending_value = None
+            self.async_write_ha_state()
+        else:
+            self.coordinator.schedule_delayed_refresh(5.0)
+
+
+class SemsCurrentLimitNumber(CoordinatorEntity, NumberEntity):
+    """Cloud entity for setting the import current limit (A) via set-config.
+
+    This is the maximum current the wallbox draws from the grid per phase,
+    analogous to the breaker rating. Typical values: 6–32 A.
+    The API field is ``currentLimit`` in the detail response.
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "current_limit"
+    _attr_device_class = NumberDeviceClass.CURRENT
+    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 32.0
+    _attr_native_step = 1.0
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = "box"
+
+    _PENDING_TIMEOUT = 60.0
+
+    def __init__(self, coordinator: SemsUpdateCoordinator, sn: str, api) -> None:
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self.sn = sn
+        self.api = api
+        self._pending_value: float | None = None
+        self._pending_until: float = 0.0
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-number-current-limit"
+
+    @property
+    def device_info(self):
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return {
+            "identifiers": {(DOMAIN, self.sn)},
+            "name": data.get("name") or f"GoodWe Wallbox {self.sn}",
+            "manufacturer": "GoodWe",
+        }
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success
+
+    @property
+    def native_value(self) -> float | None:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        api_val_raw = data.get("currentLimit")
+        try:
+            api_val = float(api_val_raw) if api_val_raw is not None else None
+        except (TypeError, ValueError):
+            api_val = None
+        now = time.monotonic()
+        if self._pending_value is not None:
+            if now >= self._pending_until:
+                self._pending_value = None
+            elif api_val is not None and abs(api_val - self._pending_value) < 0.5:
+                self._pending_value = None
+            else:
+                return self._pending_value
+        return api_val
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self.async_write_ha_state()
+
+    async def async_set_native_value(self, value: float) -> None:
+        self._pending_value = value
+        self._pending_until = time.monotonic() + self._PENDING_TIMEOUT
+        self.async_write_ha_state()
+        ok = await self.hass.async_add_executor_job(
+            lambda: self.api.set_config_gen2(self.sn, currentLimit=int(value))
+        )
+        if not ok:
+            _LOGGER.warning("SemsCurrentLimitNumber %s: set_config failed", self.sn)
+            self._pending_value = None
+            self.async_write_ha_state()
+        else:
+            self.coordinator.schedule_delayed_refresh(5.0)
+
+
+# ---------------------------------------------------------------------------
+# Cloud entities for per-mode numeric params (maxEnergy, minEnergy, soc target)
+# ---------------------------------------------------------------------------
+
+class _SemsModeParamNumber(CoordinatorEntity, NumberEntity):
+    """Base class for cloud number entities that send their value via set-mode.
+
+    Subclasses must define:
+      _attr_translation_key, unique_id, _available_modes, _data_key, _override_kwarg.
+    ``_override_kwarg`` must match a kwarg name accepted by set_charge_mode_gen2
+    (max_energy | min_energy | soc_target).
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = "slider"
+
+    _PENDING_TIMEOUT = 60.0
+    _available_modes: tuple = (0, 2)  # override in subclass
+    _data_key: str = ""
+    _override_kwarg: str = ""
+
+    def __init__(self, coordinator: SemsUpdateCoordinator, sn: str, api) -> None:
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self.sn = sn
+        self.api = api
+        self._pending_value: float | None = None
+        self._pending_until: float = 0.0
+
+    @property
+    def device_info(self):
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return {
+            "identifiers": {(DOMAIN, self.sn)},
+            "name": data.get("name") or f"GoodWe Wallbox {self.sn}",
+            "manufacturer": "GoodWe",
+        }
+
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return data.get("chargeMode") in self._available_modes
+
+    @property
+    def native_value(self) -> float | None:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        api_raw = data.get(self._data_key)
+        try:
+            api_val = float(api_raw) if api_raw is not None else None
+        except (TypeError, ValueError):
+            api_val = None
+        now = time.monotonic()
+        if self._pending_value is not None:
+            if now >= self._pending_until:
+                self._pending_value = None
+            elif api_val is not None and abs(api_val - self._pending_value) < 0.5:
+                self._pending_value = None
+            else:
+                return self._pending_value
+        return api_val
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self.async_write_ha_state()
+
+    async def async_set_native_value(self, value: float) -> None:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        mode = data.get("chargeMode", 0)
+        # Build full current-param kwargs so the API call preserves other settings.
+        # chargeMaxPower is only relevant for mode 0.
+        charge_power = data.get("set_charge_power") if mode == 0 else None
+        kwargs: dict = {
+            "max_energy": int(data.get("max_energy") or 0),
+            "min_energy": int(data.get("min_energy") or 0),
+            "soc_target": int(data.get("charge_target_soc") or 0),
+        }
+        # Preserve finish_time for PV modes so it is not accidentally reset
+        if mode in (1, 2):
+            ft = data.get("finish_time")
+            if ft is not None:
+                kwargs["finish_time"] = str(ft)
+        kwargs[self._override_kwarg] = int(value)
+
+        self._pending_value = value
+        self._pending_until = time.monotonic() + self._PENDING_TIMEOUT
+        self.async_write_ha_state()
+
+        ok = await self.hass.async_add_executor_job(
+            lambda: self.api.set_charge_mode_gen2(
+                self.sn, mode, charge_power, None, **kwargs
+            )
+        )
+        if not ok:
+            _LOGGER.warning("%s: set_charge_mode failed, reverting pending value", self.unique_id)
+            self._pending_value = None
+            self.async_write_ha_state()
+        else:
+            self.coordinator.schedule_delayed_refresh(5.0)
+
+
+class SemsMaxEnergyNumber(_SemsModeParamNumber):
+    """Max session energy (kWh). 0 = unlimited. Available in Fast (0) and PV+BAT (2) modes."""
+
+    _attr_translation_key = "max_session_energy"
+    _attr_device_class = NumberDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 200.0
+    _attr_native_step = 1.0
+    _available_modes = (0, 1, 2)
+    _data_key = "max_energy"
+    _override_kwarg = "max_energy"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-number-max-energy"
+
+
+class SemsTargetSocNumber(_SemsModeParamNumber):
+    """Target SOC % — stop charging when battery reaches this level.
+    0 = no SOC stop condition. Available in Fast (0) and PV+BAT (2) modes."""
+
+    _attr_translation_key = "charge_target_soc"
+    _attr_native_unit_of_measurement = "%"
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 100.0
+    _attr_native_step = 1.0
+    _available_modes = (0, 2)
+    _data_key = "charge_target_soc"
+    _override_kwarg = "soc_target"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-number-target-soc"
+
+
+class SemsMinEnergyNumber(_SemsModeParamNumber):
+    """Min guaranteed energy (kWh) in PV+BAT mode.
+    0 = no minimum. Only available in PV+BAT mode (2)."""
+
+    _attr_translation_key = "min_session_energy"
+    _attr_device_class = NumberDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = 200.0
+    _attr_native_step = 1.0
+    _available_modes = (1, 2)
+    _data_key = "min_energy"
+    _override_kwarg = "min_energy"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-number-min-energy"
 
 
 # ---------------------------------------------------------------------------
@@ -501,3 +847,28 @@ class ModbusBatteryDischargeSocNumber(_ModbusNumber):
 
     def _do_write(self, value: float) -> bool:
         return self._client.write_battery_discharge_soc(int(value))
+
+
+class ModbusCurrentLimitNumber(_ModbusNumber):
+    """Import current limit in amps (reg 10026). Range [6, 32] A."""
+
+    _attr_translation_key = "current_limit"
+    _attr_device_class = NumberDeviceClass.CURRENT
+    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+    _attr_native_min_value = 6.0
+    _attr_native_max_value = 32.0
+    _attr_native_step = 1.0
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_mode = "slider"
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}_modbus_current_limit"
+
+    def _api_value(self) -> float | None:
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        v = data.get("modbus_breaker_current")
+        return float(v) if v is not None else None
+
+    def _do_write(self, value: float) -> bool:
+        return self._client.write_breaker_current(int(value))

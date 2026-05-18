@@ -28,6 +28,23 @@ CONF_MODBUS_DEVICE_ID = "modbus_device_id"
 DEFAULT_MODBUS_PORT = 502
 DEFAULT_MODBUS_DEVICE_ID = 247  # 0xF7 -- empirically discovered for GoodWe AC Wallbox Gen2
 
+# Cloud capability config keys (stored in config_entry.data at setup time)
+CONF_PILE_GENERATION = "pile_generation"          # "1" or "2"
+CONF_RATED_POWER = "rated_power"                  # float kW
+CONF_DASHBOARD_FUNCTIONS = "dashboard_functions"  # list[str]
+CONF_MORE_DEVICE_CONTROLS = "more_device_controls"  # list[str]
+
+# Capability string keys from dashboardFunctions
+CAP_START_CHARGING = "startCharging"
+CAP_CHARGING_MODE_SELECTION = "chargingModeSelection"
+CAP_PLUG_AND_CHARGE = "plugAndCharge"
+
+# Capability string keys from moreDeviceControls
+CAP_OUTPUT_POWER_SETTING = "Output_Power_Setting"
+CAP_DYNAMIC_LOAD_CONTROL = "Dynamic_Load_Control"
+CAP_ENSURE_MIN_CHARGING_POWER = "Ensure_minimum_Charging_Power"
+CAP_PHASE_SWITCH = "Phase_Switch"
+
 # Validation of the user's configuration
 SEMS_CONFIG_SCHEMA = vol.Schema(
     {

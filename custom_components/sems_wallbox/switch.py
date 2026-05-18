@@ -12,7 +12,14 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, CONN_TYPE_MODBUS
+from .const import (
+    DOMAIN,
+    CONN_TYPE_MODBUS,
+    CAP_PLUG_AND_CHARGE,
+    CAP_DYNAMIC_LOAD_CONTROL,
+    CAP_PHASE_SWITCH,
+    CAP_ENSURE_MIN_CHARGING_POWER,
+)
 from .coordinator import SemsUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,6 +57,9 @@ async def async_setup_entry(
         return
 
     api = runtime["api"]
+    caps = runtime.get("capabilities", {})
+    dashboard = caps.get("dashboard_functions", [])
+    more_controls = caps.get("more_device_controls", [])
 
     _LOGGER.debug(
         "Setting up SemsSwitch entities (version %s) for entry %s",
@@ -62,7 +72,16 @@ async def async_setup_entry(
         start_status = data.get("startStatus")
         current_is_on = bool(start_status) if start_status is not None else False
         entities.append(SemsSwitch(coordinator, sn, api, current_is_on))
-        entities.append(SemsMinimumPowerSwitch(coordinator, sn, api))
+        # Ensure minimum charging power: show when explicitly listed OR when capability list
+        # is empty (old entry, before capability detection was added).
+        if not more_controls or CAP_ENSURE_MIN_CHARGING_POWER in more_controls:
+            entities.append(SemsMinimumPowerSwitch(coordinator, sn, api))
+        if CAP_PLUG_AND_CHARGE in dashboard:
+            entities.append(SemsPlugAndChargeSwitch(coordinator, sn, api))
+        if CAP_DYNAMIC_LOAD_CONTROL in more_controls:
+            entities.append(SemsDynamicLoadSwitch(coordinator, sn, api))
+        if CAP_PHASE_SWITCH in more_controls:
+            entities.append(SemsPhaseSwitchSwitch(coordinator, sn, api))
 
     async_add_entities(entities)
 
@@ -250,38 +269,41 @@ class SemsSwitch(CoordinatorEntity, SwitchEntity):
         self.async_write_ha_state()
 
 
-class SemsMinimumPowerSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to enable/disable 'ensure minimum charging power' in PV priority mode.
+# ---------------------------------------------------------------------------
+# Base class for cloud set-config switches (plug & charge, dynamic load, phase)
+# ---------------------------------------------------------------------------
 
-    When enabled, the wallbox guarantees a minimum charge current from the grid
-    even when PV production is insufficient. Only relevant in PV priority mode (mode=1);
-    the entity is unavailable in other modes.
+_CLOUD_CONFIG_PENDING_TIMEOUT = 60.0
+
+
+class _SemsConfigSwitch(CoordinatorEntity, SwitchEntity):
+    """Base for simple cloud switches that toggle via set_config_gen2.
+
+    Subclasses must implement:
+      _attr_translation_key
+      unique_id property
+      _data_key: str          -- key in coordinator data dict
+      _on_value: any          -- expected coordinator value when ON
+      _set_config_on: dict    -- kwargs passed to set_config_gen2 when turning ON
+      _set_config_off: dict   -- kwargs passed to set_config_gen2 when turning OFF
     """
 
     _attr_should_poll = False
     _attr_has_entity_name = True
-    _attr_translation_key = "ensure_minimum_charging_power"
     _attr_entity_category = EntityCategory.CONFIG
 
-    # How long to hold the pending (optimistic) state while waiting for API to apply.
-    # set-mode can take up to 90 s; use 120 s to be safe.
-    _PENDING_TIMEOUT = 120.0
+    _data_key: str = ""
+    _on_value: object = True
+    _set_config_on: dict = {}
+    _set_config_off: dict = {}
 
     def __init__(self, coordinator: SemsUpdateCoordinator, sn: str, api) -> None:
-        """Initialize the switch."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self.api = api
         self.sn = sn
-        # Pending state: set while we wait for the API to confirm the command.
-        # Prevents coordinator polls from reverting the optimistic UI state.
+        self.api = api
         self._pending_state: bool | None = None
         self._pending_set_at: float = 0.0
-        _LOGGER.debug("Creating SemsMinimumPowerSwitch for wallbox %s", self.sn)
-
-    @property
-    def unique_id(self) -> str:
-        return f"{self.sn}-switch-ensure-minimum-power"
 
     @property
     def device_info(self):
@@ -294,25 +316,18 @@ class SemsMinimumPowerSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def available(self) -> bool:
-        """Available in PV priority (mode 1) and PV & battery (mode 2)."""
-        if not self.coordinator.last_update_success:
-            return False
-        data = self.coordinator.data.get(self.sn, {}) or {}
-        return data.get("chargeMode") in (1, 2)
+        return self.coordinator.last_update_success
 
     @property
     def is_on(self) -> bool:
         data = self.coordinator.data.get(self.sn, {}) or {}
-        api_val = bool(data.get("ensure_minimum_charging_power", False))
+        api_val = bool(data.get(self._data_key) == self._on_value or data.get(self._data_key))
         if self._pending_state is not None:
-            if time.monotonic() - self._pending_set_at >= self._PENDING_TIMEOUT:
-                # Timeout expired -- stop holding
+            if time.monotonic() - self._pending_set_at >= _CLOUD_CONFIG_PENDING_TIMEOUT:
                 self._pending_state = None
             elif api_val == self._pending_state:
-                # API confirmed our command
                 self._pending_state = None
             else:
-                # Still waiting -- show pending state to prevent flicker
                 return self._pending_state
         return api_val
 
@@ -320,47 +335,90 @@ class SemsMinimumPowerSwitch(CoordinatorEntity, SwitchEntity):
     def _handle_coordinator_update(self) -> None:
         self.async_write_ha_state()
 
-    async def async_turn_on(self, **kwargs) -> None:
-        """Enable minimum charging power guarantee."""
-        _LOGGER.debug("SemsMinimumPowerSwitch %s: turning ON", self.sn)
-        self._pending_state = True
+    async def _async_set(self, state: bool) -> None:
+        self._pending_state = state
         self._pending_set_at = time.monotonic()
         self.async_write_ha_state()
+        kwargs = self._set_config_on if state else self._set_config_off
         ok = await self.hass.async_add_executor_job(
-            self.api.set_charge_mode_gen2,
-            self.sn,
-            1,  # PV priority
-            None,
-            True,  # ensure_minimum_charging_power
+            lambda: self.api.set_config_gen2(self.sn, **kwargs)
         )
         if not ok:
-            _LOGGER.warning("SemsMinimumPowerSwitch %s: turn ON failed", self.sn)
+            _LOGGER.warning("%s: set_config failed, reverting optimistic state", self.unique_id)
             self._pending_state = None
             self.async_write_ha_state()
-        self.coordinator.schedule_delayed_refresh(5.0)
+        else:
+            self.coordinator.schedule_delayed_refresh(5.0)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._async_set(True)
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Disable minimum charging power guarantee."""
-        _LOGGER.debug("SemsMinimumPowerSwitch %s: turning OFF", self.sn)
-        self._pending_state = False
-        self._pending_set_at = time.monotonic()
-        self.async_write_ha_state()
-        ok = await self.hass.async_add_executor_job(
-            self.api.set_charge_mode_gen2,
-            self.sn,
-            1,  # PV priority
-            None,
-            False,  # ensure_minimum_charging_power
-        )
-        if not ok:
-            _LOGGER.warning("SemsMinimumPowerSwitch %s: turn OFF failed", self.sn)
-            self._pending_state = None
-            self.async_write_ha_state()
-        self.coordinator.schedule_delayed_refresh(5.0)
+        await self._async_set(False)
 
 
-# ---------------------------------------------------------------------------
-# Modbus-specific switch entities (local Modbus TCP mode only)
+class SemsPlugAndChargeSwitch(_SemsConfigSwitch):
+    """Plug & Charge switch (chargedNow: 170=enabled, 0=disabled)."""
+
+    _attr_translation_key = "plug_and_charge"
+    _data_key = "plug_and_charge"
+    _on_value = True
+    _set_config_on = {"chargedNow": 170}
+    _set_config_off = {"chargedNow": 0}
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-switch-plug-and-charge"
+
+
+class SemsDynamicLoadSwitch(_SemsConfigSwitch):
+    """Dynamic Load Control switch (dynamicLoad: 1=enabled, 0=disabled)."""
+
+    _attr_translation_key = "dynamic_load_control"
+    _data_key = "dynamicLoad"
+    _on_value = True
+    _set_config_on = {"dynamicLoad": 1}
+    _set_config_off = {"dynamicLoad": 0}
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-switch-dynamic-load"
+
+
+class SemsPhaseSwitchSwitch(_SemsConfigSwitch):
+    """Phase Switch (phaseSwitch: 1=single-phase, 0=three-phase).
+
+    Note: the 'on' state means single-phase mode is forced.
+    """
+
+    _attr_translation_key = "phase_switch"
+    _data_key = "phaseSwitch"
+    _on_value = True
+    _set_config_on = {"phaseSwitch": 1}
+    _set_config_off = {"phaseSwitch": 0}
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-switch-phase-switch"
+
+
+class SemsMinimumPowerSwitch(_SemsConfigSwitch):
+    """Ensure minimum charging power switch (ensureMinimumChargingPower: 170=enabled, 0=disabled).
+
+    Uses the set-config endpoint so it is available in all charge modes.
+    """
+
+    _attr_translation_key = "ensure_minimum_charging_power"
+    _data_key = "ensure_minimum_charging_power"
+    _on_value = True
+    _set_config_on = {"ensureMinimumChargingPower": 170}
+    _set_config_off = {"ensureMinimumChargingPower": 0}
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-switch-ensure-minimum-power"
+
+
 # ---------------------------------------------------------------------------
 
 _MODBUS_PENDING_TIMEOUT = 90.0

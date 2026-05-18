@@ -26,6 +26,10 @@ from .const import (
     DEFAULT_MODBUS_DEVICE_ID,
     DEFAULT_SCAN_INTERVAL_IDLE,
     DEFAULT_SCAN_INTERVAL_CHARGING,
+    CONF_PILE_GENERATION,
+    CONF_RATED_POWER,
+    CONF_DASHBOARD_FUNCTIONS,
+    CONF_MORE_DEVICE_CONTROLS,
 )
 from .sems_api import SemsApi
 
@@ -70,6 +74,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._plant_id: str | None = None
         self._plant_options: dict[str, str] = {}   # {id: display_name}
         self._charger_sn_to_model: dict[str, str] = {}  # {sn: model}
+        self._charger_capabilities: dict[str, dict] = {}  # {sn: raw device info dict}
         self._charger_manual_error: str | None = None
         self._pending_sn: str = ""  # SN waiting for model confirmation
 
@@ -349,14 +354,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _finish_or_model_step(self, sn: str):
         """Create entry directly when model is known, otherwise fetch it, then ask."""
         self._pending_sn = sn
-        if not self._charger_sn_to_model.get(sn):
-            # Try to auto-discover the model via control-item-content-list
+        # Always fetch device info to capture capabilities (pileGeneration, dashboardFunctions,
+        # moreDeviceControls, ratedPower) regardless of whether the model is already known.
+        if not self._charger_capabilities.get(sn):
             assert self._api is not None
             info = await self.hass.async_add_executor_job(self._api.fetch_device_info, sn)
-            model = (info.get("productModel") or "").strip()
-            if model:
-                _LOGGER.debug("SEMS config: auto-discovered model %s for %s", model, sn)
-                self._charger_sn_to_model[sn] = model
+            if info:
+                self._charger_capabilities[sn] = info
+                model = (info.get("productModel") or "").strip()
+                if model and not self._charger_sn_to_model.get(sn):
+                    _LOGGER.debug("SEMS config: auto-discovered model %s for %s", model, sn)
+                    self._charger_sn_to_model[sn] = model
         if self._charger_sn_to_model.get(sn):
             return self.async_create_entry(title=sn, data=self._build_entry_data(sn))
         return await self.async_step_model()
@@ -397,6 +405,21 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         model = self._charger_sn_to_model.get(sn, "")
         if model:
             data[CONF_PRODUCT_MODEL] = model
+        # Store device capabilities (pileGeneration, ratedPower, dashboardFunctions, moreDeviceControls)
+        info = self._charger_capabilities.get(sn, {})
+        if info:
+            generation = str(info.get("pileGeneration") or "")
+            if generation:
+                data[CONF_PILE_GENERATION] = generation
+            rated = info.get("ratedPower")
+            if rated is not None:
+                data[CONF_RATED_POWER] = rated
+            dashboard = info.get("dashboardFunctions")
+            if isinstance(dashboard, list):
+                data[CONF_DASHBOARD_FUNCTIONS] = dashboard
+            more = info.get("moreDeviceControls")
+            if isinstance(more, list):
+                data[CONF_MORE_DEVICE_CONTROLS] = more
         return data
 
 

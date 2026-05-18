@@ -205,6 +205,10 @@ class WallboxModbusClient:
         """Enable/disable dynamic load management. Reg 10025."""
         return self._write(10025, 1 if enabled else 0)
 
+    def write_breaker_current(self, amps: int) -> bool:
+        """Set import current limit in amps. Reg 10026, range [6, 32]."""
+        return self._write(10026, max(6, min(32, int(amps))))
+
     def write_phase_switch(self, single_phase: bool) -> bool:
         """Enable/disable single-phase mode. Reg 10023: 1=single-phase, 0=three-phase.
 

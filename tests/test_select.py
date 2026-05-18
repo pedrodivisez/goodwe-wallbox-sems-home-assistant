@@ -456,3 +456,163 @@ class TestPendingMode:
         entity._handle_coordinator_update()
         # async_write_ha_state must NOT have been called (early return)
         entity.async_write_ha_state.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# SemsChargeDurationSelect tests
+# ---------------------------------------------------------------------------
+
+SemsChargeDurationSelect = _select_mod.SemsChargeDurationSelect
+_DURATION_OPTIONS = _select_mod._DURATION_OPTIONS
+_DURATION_TO_HOURS = _select_mod._DURATION_TO_HOURS
+_HOURS_TO_DURATION = _select_mod._HOURS_TO_DURATION
+
+
+def _make_duration_entity(chargeMode=1, finish_time="0", **extra_data):
+    data = {
+        "sn": SAMPLE_SN,
+        "chargeMode": chargeMode,
+        "set_charge_power": 7.4,
+        "max_energy": 20,
+        "min_energy": 5,
+        "charge_target_soc": 20,
+        "finish_time": finish_time,
+        "name": "My Wallbox",
+        **extra_data,
+    }
+    coordinator = _FakeCoordinator({SAMPLE_SN: data})
+    api = MagicMock()
+    api.set_charge_mode_gen2 = MagicMock(return_value=True)
+    entity = SemsChargeDurationSelect(coordinator, SAMPLE_SN, api)
+    hass = MagicMock()
+
+    async def fake_executor(func, *args):
+        return func(*args)
+
+    hass.async_add_executor_job = fake_executor
+    entity.hass = hass
+    entity.async_write_ha_state = MagicMock()
+    return entity
+
+
+class TestSemsChargeDurationSelectConstants:
+    def test_duration_options_length(self):
+        assert len(_DURATION_OPTIONS) == 7
+
+    def test_asap_maps_to_zero(self):
+        assert _DURATION_TO_HOURS["asap"] == 0
+
+    def test_6h_maps_to_six(self):
+        assert _DURATION_TO_HOURS["6h"] == 6
+
+    def test_hours_to_duration_roundtrip(self):
+        for hours in range(7):
+            assert _DURATION_TO_HOURS[_HOURS_TO_DURATION[hours]] == hours
+
+
+class TestSemsChargeDurationSelectProperties:
+    def test_unique_id(self):
+        entity = _make_duration_entity()
+        assert entity.unique_id == f"{SAMPLE_SN}-select-charge-duration"
+
+    def test_available_in_pv_priority(self):
+        entity = _make_duration_entity(chargeMode=1)
+        assert entity.available is True
+
+    def test_available_in_pv_and_battery(self):
+        entity = _make_duration_entity(chargeMode=2)
+        assert entity.available is True
+
+    def test_not_available_in_fast_mode(self):
+        entity = _make_duration_entity(chargeMode=0)
+        assert entity.available is False
+
+    def test_not_available_when_coordinator_failed(self):
+        entity = _make_duration_entity(chargeMode=1)
+        entity.coordinator.last_update_success = False
+        assert entity.available is False
+
+    def test_current_option_asap(self):
+        entity = _make_duration_entity(finish_time="0")
+        assert entity.current_option == "asap"
+
+    def test_current_option_2h(self):
+        entity = _make_duration_entity(finish_time="2")
+        assert entity.current_option == "2h"
+
+    def test_current_option_none_when_finish_time_missing(self):
+        entity = _make_duration_entity()
+        entity.coordinator.data[SAMPLE_SN].pop("finish_time")
+        assert entity.current_option is None
+
+    def test_options_list(self):
+        entity = _make_duration_entity()
+        assert entity._attr_options == _DURATION_OPTIONS
+
+
+class TestSemsChargeDurationSelectOption:
+    @pytest.mark.asyncio
+    async def test_select_asap_calls_api_with_zero(self):
+        entity = _make_duration_entity(chargeMode=1, finish_time="2")
+        await entity.async_select_option("asap")
+        entity.api.set_charge_mode_gen2.assert_called_once_with(
+            SAMPLE_SN, 1, None, None,
+            max_energy=20, min_energy=5, soc_target=20, finish_time="0",
+        )
+
+    @pytest.mark.asyncio
+    async def test_select_3h_calls_api_with_three(self):
+        entity = _make_duration_entity(chargeMode=2, finish_time="0")
+        await entity.async_select_option("3h")
+        entity.api.set_charge_mode_gen2.assert_called_once_with(
+            SAMPLE_SN, 2, None, None,
+            max_energy=20, min_energy=5, soc_target=20, finish_time="3",
+        )
+
+    @pytest.mark.asyncio
+    async def test_pending_value_set_optimistically(self):
+        entity = _make_duration_entity(chargeMode=1, finish_time="0")
+        await entity.async_select_option("4h")
+        assert entity._pending_value == "4h"
+
+    @pytest.mark.asyncio
+    async def test_pending_value_cleared_on_api_failure(self):
+        entity = _make_duration_entity(chargeMode=1)
+        entity.api.set_charge_mode_gen2 = MagicMock(return_value=False)
+        await entity.async_select_option("2h")
+        assert entity._pending_value is None
+
+    @pytest.mark.asyncio
+    async def test_unknown_option_ignored(self):
+        entity = _make_duration_entity(chargeMode=1)
+        await entity.async_select_option("999h")
+        entity.api.set_charge_mode_gen2.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_coordinator_refresh_scheduled_on_success(self):
+        entity = _make_duration_entity(chargeMode=1)
+        entity.coordinator.schedule_delayed_refresh = MagicMock()
+        await entity.async_select_option("1h")
+        entity.coordinator.schedule_delayed_refresh.assert_called_once()
+
+    def test_current_option_returns_pending_while_waiting(self):
+        entity = _make_duration_entity(chargeMode=1, finish_time="0")
+        entity._pending_value = "3h"
+        entity._pending_until = time.monotonic() + 30.0
+        assert entity.current_option == "3h"
+
+    def test_pending_cleared_when_poll_confirms(self):
+        entity = _make_duration_entity(chargeMode=1, finish_time="3")
+        entity._pending_value = "3h"
+        entity._pending_until = time.monotonic() + 30.0
+        result = entity.current_option
+        assert entity._pending_value is None
+        assert result == "3h"
+
+    def test_pending_cleared_on_timeout(self):
+        entity = _make_duration_entity(chargeMode=1, finish_time="0")
+        entity._pending_value = "3h"
+        entity._pending_until = time.monotonic() - 1.0
+        result = entity.current_option
+        assert entity._pending_value is None
+        assert result == "asap"

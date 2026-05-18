@@ -235,6 +235,18 @@
                     "pv_and_battery": "PV a baterie"
                 }
             },
+            "charge_duration": {
+                "name": "Doba nabíjení",
+                "state": {
+                    "asap": "Co nejdříve",
+                    "1h": "1 hodina",
+                    "2h": "2 hodiny",
+                    "3h": "3 hodiny",
+                    "4h": "4 hodiny",
+                    "5h": "5 hodin",
+                    "6h": "6 hodin"
+                }
+            },
             "modbus_charge_mode": {
                 "name": "Režim nabíjení",
                 "state": {
@@ -258,7 +270,22 @@
         },
         "number": {
             "charge_power": {
-                "name": "Limit výkonu"
+                "name": "Max. nabíjecí výkon"
+            },
+            "current_limit": {
+                "name": "Limit proudu ze sítě"
+            },
+            "max_session_energy": {
+                "name": "Max. energie sezení"
+            },
+            "min_session_energy": {
+                "name": "Min. energie sezení"
+            },
+            "charge_target_soc": {
+                "name": "Min. SOC baterie"
+            },
+            "output_power_limit": {
+                "name": "Limit výstupního výkonu"
             },
             "modbus_charge_power": {
                 "name": "Max. nabíjecí výkon"
@@ -270,7 +297,10 @@
                 "name": "Min. energie sezení"
             },
             "modbus_bat_soc_limit": {
-                "name": "SOC limit vybíjení baterie"
+                "name": "Min. SOC baterie"
+            },
+            "modbus_current_limit": {
+                "name": "Limit proudu ze sítě"
             }
         },
         "switch": {
@@ -278,13 +308,22 @@
                 "name": "Nabíjení"
             },
             "ensure_minimum_charging_power": {
-                "name": "Zajistit minimální nabíjecí výkon"
+                "name": "Minimální nabíjecí výkon"
+            },
+            "plug_and_charge": {
+                "name": "Plug & Charge"
+            },
+            "dynamic_load_control": {
+                "name": "Dynamická správa zátěže"
+            },
+            "phase_switch": {
+                "name": "Přepínání fází"
             },
             "modbus_start_charging": {
                 "name": "Nabíjení"
             },
             "modbus_maintain_min_power": {
-                "name": "Udržovat minimální výkon"
+                "name": "Minimální nabíjecí výkon"
             },
             "modbus_plug_charge": {
                 "name": "Plug & Charge"
@@ -296,7 +335,7 @@
                 "name": "EMS minimální výkon"
             },
             "modbus_phase_switch": {
-                "name": "Automatické přepínání fází"
+                "name": "Přepínání fází"
             }
         },
         "button": {

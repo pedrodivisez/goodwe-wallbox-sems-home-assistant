@@ -44,6 +44,10 @@ sys.modules[_pkg_name] = _pkg
 _const = types.ModuleType(f"{_pkg_name}.const")
 _const.DOMAIN = "sems_wallbox"
 _const.CONN_TYPE_MODBUS = "modbus"
+_const.CAP_PLUG_AND_CHARGE = "plugAndCharge"
+_const.CAP_DYNAMIC_LOAD_CONTROL = "Dynamic_Load_Control"
+_const.CAP_PHASE_SWITCH = "Phase_Switch"
+_const.CAP_ENSURE_MIN_CHARGING_POWER = "Ensure_minimum_Charging_Power"
 sys.modules[f"{_pkg_name}.const"] = _const
 setattr(_pkg, "const", _const)
 

@@ -34,6 +34,10 @@ OPERATION_MODE = SelectEntityDescription(
     translation_key="charge_mode",
 )
 
+_DURATION_OPTIONS = ["asap", "1h", "2h", "3h", "4h", "5h", "6h"]
+_DURATION_TO_HOURS: dict[str, int] = {opt: i for i, opt in enumerate(_DURATION_OPTIONS)}
+_HOURS_TO_DURATION: dict[int, str] = {i: opt for i, opt in enumerate(_DURATION_OPTIONS)}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -70,6 +74,7 @@ async def async_setup_entry(
                 _MODE_TO_OPTION.get(active_mode),
             )
         )
+        entities.append(SemsChargeDurationSelect(coordinator, sn, api))
 
     async_add_entities(entities)
 
@@ -335,6 +340,120 @@ class InverterOperationModeEntity(CoordinatorEntity, SelectEntity):
 
 
 # ---------------------------------------------------------------------------
+# Cloud (SEMS) charge duration select — finish time for PV / PV+battery modes
+# ---------------------------------------------------------------------------
+
+_SEMS_PENDING_DURATION_TIMEOUT = 30.0
+
+
+class SemsChargeDurationSelect(CoordinatorEntity, SelectEntity):
+    """Cloud charge duration (finish time) select for PV priority and PV+battery modes.
+
+    Maps to the ``finishTime`` field in the set-mode API call.
+    0 = ASAP (no deadline), 1-6 = target hours to complete charging.
+    Available only when chargeMode is 1 (PV priority) or 2 (PV+battery).
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+    _attr_translation_key = "charge_duration"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_options = _DURATION_OPTIONS
+
+    def __init__(self, coordinator: SemsUpdateCoordinator, sn: str, api) -> None:
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self.sn = sn
+        self.api = api
+        self._pending_value: str | None = None
+        self._pending_until: float = 0.0
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self.sn}-select-charge-duration"
+
+    @property
+    def device_info(self):
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return {
+            "identifiers": {(DOMAIN, self.sn)},
+            "name": data.get("name") or f"GoodWe Wallbox {self.sn}",
+            "manufacturer": "GoodWe",
+        }
+
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        return data.get("chargeMode") in (1, 2)
+
+    @property
+    def current_option(self) -> str | None:
+        now = time.monotonic()
+        if self._pending_value is not None:
+            if now >= self._pending_until:
+                self._pending_value = None
+            else:
+                data = self.coordinator.data.get(self.sn, {}) or {}
+                raw = data.get("finish_time")
+                if raw is not None:
+                    try:
+                        if _HOURS_TO_DURATION.get(int(raw)) == self._pending_value:
+                            self._pending_value = None
+                    except (TypeError, ValueError):
+                        pass
+                if self._pending_value is not None:
+                    return self._pending_value
+
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        raw = data.get("finish_time")
+        if raw is None:
+            return None
+        try:
+            return _HOURS_TO_DURATION.get(int(raw))
+        except (TypeError, ValueError):
+            return None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        if option not in _DURATION_TO_HOURS:
+            _LOGGER.warning("SemsChargeDurationSelect: unknown option %r", option)
+            return
+        hours = _DURATION_TO_HOURS[option]
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        mode = data.get("chargeMode", 1)
+        # Re-send full mode params so existing settings are preserved
+        charge_power = data.get("set_charge_power") if mode == 0 else None
+        max_energy = int(data.get("max_energy") or 0)
+        min_energy = int(data.get("min_energy") or 0)
+        soc_target = int(data.get("charge_target_soc") or 0)
+
+        self._pending_value = option
+        self._pending_until = time.monotonic() + _SEMS_PENDING_DURATION_TIMEOUT
+        self.async_write_ha_state()
+
+        ok = await self.hass.async_add_executor_job(
+            lambda: self.api.set_charge_mode_gen2(
+                self.sn, mode, charge_power, None,
+                max_energy=max_energy,
+                min_energy=min_energy,
+                soc_target=soc_target,
+                finish_time=str(hours),
+            )
+        )
+        if not ok:
+            _LOGGER.warning("SemsChargeDurationSelect %s: set_charge_mode_gen2 failed", self.sn)
+            self._pending_value = None
+            self.async_write_ha_state()
+        else:
+            self.coordinator.schedule_delayed_refresh(5.0)
+
+
+# ---------------------------------------------------------------------------
 # Modbus-specific select entity (local Modbus TCP mode only)
 # ---------------------------------------------------------------------------
 
@@ -421,10 +540,6 @@ class ModbusChargeModeSelect(CoordinatorEntity, SelectEntity):
 # ---------------------------------------------------------------------------
 # Modbus charge duration (completion time) select — reg 10031
 # ---------------------------------------------------------------------------
-
-_DURATION_OPTIONS = ["asap", "1h", "2h", "3h", "4h", "5h", "6h"]
-_DURATION_TO_HOURS: dict[str, int] = {opt: i for i, opt in enumerate(_DURATION_OPTIONS)}
-_HOURS_TO_DURATION: dict[int, str] = {i: opt for i, opt in enumerate(_DURATION_OPTIONS)}
 
 
 class ModbusChargeDurationSelect(CoordinatorEntity, SelectEntity):

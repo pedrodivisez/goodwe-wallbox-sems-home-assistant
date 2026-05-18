@@ -31,6 +31,8 @@ sys.modules[_pkg_name] = _pkg
 _const = types.ModuleType(f"{_pkg_name}.const")
 _const.DOMAIN = "sems_wallbox"
 _const.CONN_TYPE_MODBUS = "modbus"
+_const.CAP_OUTPUT_POWER_SETTING = "Output_Power_Setting"
+_const.CAP_DYNAMIC_LOAD_CONTROL = "Dynamic_Load_Control"
 sys.modules[f"{_pkg_name}.const"] = _const
 setattr(_pkg, "const", _const)
 
@@ -73,6 +75,10 @@ sys.modules[f"{_pkg_name}.number"] = _number_mod
 _spec.loader.exec_module(_number_mod)
 
 SemsNumber = _number_mod.SemsNumber
+SemsMaxEnergyNumber = _number_mod.SemsMaxEnergyNumber
+SemsTargetSocNumber = _number_mod.SemsTargetSocNumber
+SemsMinEnergyNumber = _number_mod.SemsMinEnergyNumber
+SemsOutputPowerLimitNumber = _number_mod.SemsOutputPowerLimitNumber
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -152,22 +158,13 @@ class TestAvailability:
         entity = _make_entity(chargeMode=0)
         assert entity.available is True
 
-    def test_available_in_pv_priority(self):
-        # Always available now -- value shown as read-only, editable=False attribute
+    def test_unavailable_in_pv_priority(self):
         entity = _make_entity(chargeMode=1)
-        assert entity.available is True
+        assert entity.available is False
 
-    def test_available_in_pv_and_battery(self):
+    def test_unavailable_in_pv_and_battery(self):
         entity = _make_entity(chargeMode=2)
-        assert entity.available is True
-
-    def test_editable_attribute_fast_mode(self):
-        entity = _make_entity(chargeMode=0)
-        assert entity.extra_state_attributes["editable"] is True
-
-    def test_editable_attribute_pv_mode(self):
-        entity = _make_entity(chargeMode=2)
-        assert entity.extra_state_attributes["editable"] is False
+        assert entity.available is False
 
     def test_unavailable_when_coordinator_failed(self):
         entity = _make_entity(chargeMode=0)
@@ -366,13 +363,11 @@ class TestCoordinatorUpdate:
         entity.async_write_ha_state.assert_called()
 
     def test_update_availability_reflects_charge_mode(self):
-        # Entity is always available now; only editable attribute changes.
         entity = _make_entity(chargeMode=0)
         assert entity.available is True
         entity.coordinator.data[SAMPLE_SN]["chargeMode"] = 1
         entity._handle_coordinator_update()
-        assert entity.available is True
-        assert entity.extra_state_attributes["editable"] is False
+        assert entity.available is False
 
     def test_pv_mode_shows_api_allocated_power(self):
         """In PV mode the entity shows the dynamically allocated power from the API."""
@@ -389,3 +384,271 @@ class TestCoordinatorUpdate:
         entity.coordinator.data[SAMPLE_SN]["set_charge_power"] = 5.6
         entity._handle_coordinator_update()
         assert entity.coordinator.data[SAMPLE_SN]["set_charge_power"] == 5.6
+
+
+# ---------------------------------------------------------------------------
+# Helpers for mode-param entities
+# ---------------------------------------------------------------------------
+
+_SAMPLE_MODE_DATA = {
+    "sn": SAMPLE_SN,
+    "chargeMode": 0,
+    "set_charge_power": 7.4,
+    "max_energy": 0,
+    "min_energy": 0,
+    "charge_target_soc": 0,
+    "name": "My Wallbox",
+}
+
+
+def _make_hass():
+    hass = MagicMock()
+    hass.async_create_task = MagicMock()
+
+    async def fake_executor(func):
+        return func()
+
+    hass.async_add_executor_job = fake_executor
+    return hass
+
+
+def _make_mode_entity(entity_cls, chargeMode=0, max_energy=0, min_energy=0, soc=0, charge_power=7.4):
+    data = {
+        **_SAMPLE_MODE_DATA,
+        "chargeMode": chargeMode,
+        "set_charge_power": charge_power,
+        "max_energy": max_energy,
+        "min_energy": min_energy,
+        "charge_target_soc": soc,
+    }
+    coordinator = _FakeCoordinator({SAMPLE_SN: data})
+    coordinator.schedule_delayed_refresh = MagicMock()
+    api = MagicMock()
+    api.set_charge_mode_gen2 = MagicMock(return_value=True)
+    entity = entity_cls(coordinator, SAMPLE_SN, api)
+    entity.hass = _make_hass()
+    entity.async_write_ha_state = MagicMock()
+    return entity
+
+
+# ---------------------------------------------------------------------------
+# Tests: SemsMaxEnergyNumber
+# ---------------------------------------------------------------------------
+
+class TestSemsMaxEnergyNumber:
+    def test_unique_id(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber)
+        assert e.unique_id == f"{SAMPLE_SN}-number-max-energy"
+
+    def test_translation_key(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber)
+        assert e._attr_translation_key == "max_session_energy"
+
+    def test_available_in_fast_mode(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber, chargeMode=0)
+        assert e.available is True
+
+    def test_available_in_pvbat_mode(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber, chargeMode=2)
+        assert e.available is True
+
+    def test_available_in_pv_mode(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber, chargeMode=1)
+        assert e.available is True
+
+    def test_native_value_from_data(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber, max_energy=80)
+        assert e.native_value == 80.0
+
+    @pytest.mark.asyncio
+    async def test_set_in_fast_mode_sends_mode0(self):
+        """Setting max energy in Fast mode sends set_charge_mode_gen2 with mode=0."""
+        e = _make_mode_entity(SemsMaxEnergyNumber, chargeMode=0, charge_power=7.4, max_energy=0, soc=45)
+        await e.async_set_native_value(50.0)
+        e.api.set_charge_mode_gen2.assert_called_once_with(
+            SAMPLE_SN, 0, 7.4, None,
+            max_energy=50, min_energy=0, soc_target=45
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_in_pvbat_mode_sends_mode2_no_charge_power(self):
+        """Setting max energy in PV+BAT mode sends mode=2 without chargeMaxPower."""
+        e = _make_mode_entity(SemsMaxEnergyNumber, chargeMode=2, charge_power=5.0, max_energy=0, min_energy=10, soc=30)
+        await e.async_set_native_value(60.0)
+        e.api.set_charge_mode_gen2.assert_called_once_with(
+            SAMPLE_SN, 2, None, None,
+            max_energy=60, min_energy=10, soc_target=30
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_schedules_refresh(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber, chargeMode=0)
+        await e.async_set_native_value(50.0)
+        e.coordinator.schedule_delayed_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_set_reverts_on_failure(self):
+        e = _make_mode_entity(SemsMaxEnergyNumber, chargeMode=0, max_energy=20)
+        e.api.set_charge_mode_gen2 = MagicMock(return_value=False)
+        await e.async_set_native_value(50.0)
+        # pending_value should be cleared after failure
+        assert e._pending_value is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: SemsTargetSocNumber
+# ---------------------------------------------------------------------------
+
+class TestSemsTargetSocNumber:
+    def test_unique_id(self):
+        e = _make_mode_entity(SemsTargetSocNumber)
+        assert e.unique_id == f"{SAMPLE_SN}-number-target-soc"
+
+    def test_translation_key(self):
+        e = _make_mode_entity(SemsTargetSocNumber)
+        assert e._attr_translation_key == "charge_target_soc"
+
+    def test_available_in_fast_mode(self):
+        assert _make_mode_entity(SemsTargetSocNumber, chargeMode=0).available is True
+
+    def test_available_in_pvbat_mode(self):
+        assert _make_mode_entity(SemsTargetSocNumber, chargeMode=2).available is True
+
+    def test_unavailable_in_pv_mode(self):
+        assert _make_mode_entity(SemsTargetSocNumber, chargeMode=1).available is False
+
+    def test_native_value_from_data(self):
+        e = _make_mode_entity(SemsTargetSocNumber, soc=45)
+        assert e.native_value == 45.0
+
+    @pytest.mark.asyncio
+    async def test_set_overrides_soc_target(self):
+        """Setting target SOC sends soc_target=new value, max_energy/min_energy preserved."""
+        e = _make_mode_entity(SemsTargetSocNumber, chargeMode=0, charge_power=7.4, max_energy=80, soc=45)
+        await e.async_set_native_value(60.0)
+        e.api.set_charge_mode_gen2.assert_called_once_with(
+            SAMPLE_SN, 0, 7.4, None,
+            max_energy=80, min_energy=0, soc_target=60
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: SemsMinEnergyNumber
+# ---------------------------------------------------------------------------
+
+class TestSemsMinEnergyNumber:
+    def test_unique_id(self):
+        e = _make_mode_entity(SemsMinEnergyNumber)
+        assert e.unique_id == f"{SAMPLE_SN}-number-min-energy"
+
+    def test_translation_key(self):
+        e = _make_mode_entity(SemsMinEnergyNumber)
+        assert e._attr_translation_key == "min_session_energy"
+
+    def test_unavailable_in_fast_mode(self):
+        assert _make_mode_entity(SemsMinEnergyNumber, chargeMode=0).available is False
+
+    def test_available_in_pv_mode(self):
+        assert _make_mode_entity(SemsMinEnergyNumber, chargeMode=1).available is True
+
+    def test_available_in_pvbat_mode(self):
+        assert _make_mode_entity(SemsMinEnergyNumber, chargeMode=2).available is True
+
+    def test_native_value_from_data(self):
+        e = _make_mode_entity(SemsMinEnergyNumber, min_energy=15)
+        assert e.native_value == 15.0
+
+    @pytest.mark.asyncio
+    async def test_set_in_pvbat_mode_sends_mode2(self):
+        """Setting min energy sends set_charge_mode_gen2 with mode=2 and min_energy overridden."""
+        e = _make_mode_entity(SemsMinEnergyNumber, chargeMode=2, max_energy=50, min_energy=10, soc=30)
+        await e.async_set_native_value(20.0)
+        e.api.set_charge_mode_gen2.assert_called_once_with(
+            SAMPLE_SN, 2, None, None,
+            max_energy=50, min_energy=20, soc_target=30
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: SemsOutputPowerLimitNumber
+# ---------------------------------------------------------------------------
+
+def _make_power_limit_entity(rated_max=11.0, hw_max=None):
+    data = {
+        **_SAMPLE_MODE_DATA,
+        "rated_max_charge_power": rated_max,
+        "hw_max_charge_power": hw_max,
+    }
+    coordinator = _FakeCoordinator({SAMPLE_SN: data})
+    coordinator.schedule_delayed_refresh = MagicMock()
+    api = MagicMock()
+    api.set_config_gen2 = MagicMock(return_value=True)
+    entity = SemsOutputPowerLimitNumber(coordinator, SAMPLE_SN, api)
+    entity.hass = _make_hass()
+    entity.async_write_ha_state = MagicMock()
+    return entity
+
+
+class TestSemsOutputPowerLimitNumber:
+    def test_unique_id(self):
+        e = _make_power_limit_entity()
+        assert e.unique_id == f"{SAMPLE_SN}-number-output-power-limit"
+
+    def test_translation_key(self):
+        e = _make_power_limit_entity()
+        assert e._attr_translation_key == "output_power_limit"
+
+    def test_native_value_from_data(self):
+        e = _make_power_limit_entity(rated_max=7.0)
+        assert e.native_value == 7.0
+
+    def test_native_value_none_when_missing(self):
+        e = _make_power_limit_entity()
+        e.coordinator.data[SAMPLE_SN]["rated_max_charge_power"] = None
+        assert e.native_value is None
+
+    def test_always_available(self):
+        e = _make_power_limit_entity()
+        assert e.available is True
+
+    def test_native_max_value_from_hw_max(self):
+        e = _make_power_limit_entity(rated_max=7.0, hw_max=11.0)
+        assert e.native_max_value == 11.0
+
+    def test_native_max_value_from_max_charge_power_fallback(self):
+        e = _make_power_limit_entity(rated_max=11.0)
+        e.coordinator.data[SAMPLE_SN]["max_charge_power"] = 11.0
+        assert e.native_max_value == 11.0
+
+    def test_native_max_value_from_rated_max_fallback(self):
+        e = _make_power_limit_entity(rated_max=11.0)
+        assert e.native_max_value == 11.0
+
+    def test_native_max_value_defaults_to_22_when_no_hw_data(self):
+        e = _make_power_limit_entity(rated_max=None)
+        assert e.native_max_value == 22.0
+
+    def test_unavailable_when_coordinator_failed(self):
+        e = _make_power_limit_entity()
+        e.coordinator.last_update_success = False
+        assert e.available is False
+
+    @pytest.mark.asyncio
+    async def test_set_calls_set_config_with_ratedMaxiChargePower(self):
+        e = _make_power_limit_entity()
+        await e.async_set_native_value(7.0)
+        e.api.set_config_gen2.assert_called_once_with(e.sn, ratedMaxiChargePower=7.0)
+
+    @pytest.mark.asyncio
+    async def test_set_schedules_refresh(self):
+        e = _make_power_limit_entity()
+        await e.async_set_native_value(7.0)
+        e.coordinator.schedule_delayed_refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_set_reverts_pending_on_failure(self):
+        e = _make_power_limit_entity()
+        e.api.set_config_gen2 = MagicMock(return_value=False)
+        await e.async_set_native_value(7.0)
+        assert e._pending_value is None
+

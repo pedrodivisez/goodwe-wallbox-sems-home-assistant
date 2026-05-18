@@ -235,6 +235,18 @@
                     "pv_and_battery": "PV & battery"
                 }
             },
+            "charge_duration": {
+                "name": "Charge duration",
+                "state": {
+                    "asap": "ASAP",
+                    "1h": "1 hour",
+                    "2h": "2 hours",
+                    "3h": "3 hours",
+                    "4h": "4 hours",
+                    "5h": "5 hours",
+                    "6h": "6 hours"
+                }
+            },
             "modbus_charge_mode": {
                 "name": "Charge mode",
                 "state": {
@@ -258,10 +270,25 @@
         },
         "number": {
             "charge_power": {
-                "name": "Charge power limit"
+                "name": "Max charging power"
+            },
+            "current_limit": {
+                "name": "Import current limit"
+            },
+            "max_session_energy": {
+                "name": "Max session energy"
+            },
+            "min_session_energy": {
+                "name": "Min session energy"
+            },
+            "charge_target_soc": {
+                "name": "Min. battery SOC"
+            },
+            "output_power_limit": {
+                "name": "Output power limit"
             },
             "modbus_charge_power": {
-                "name": "Max charge power"
+                "name": "Max charging power"
             },
             "modbus_max_capacity": {
                 "name": "Max session energy"
@@ -270,7 +297,10 @@
                 "name": "Min session energy"
             },
             "modbus_bat_soc_limit": {
-                "name": "Battery discharge SOC"
+                "name": "Min. battery SOC"
+            },
+            "modbus_current_limit": {
+                "name": "Import current limit"
             }
         },
         "switch": {
@@ -278,13 +308,22 @@
                 "name": "Charging"
             },
             "ensure_minimum_charging_power": {
-                "name": "Ensure minimum charging power"
+                "name": "Min charging power"
+            },
+            "plug_and_charge": {
+                "name": "Plug & Charge"
+            },
+            "dynamic_load_control": {
+                "name": "Dynamic load management"
+            },
+            "phase_switch": {
+                "name": "Phase switching"
             },
             "modbus_start_charging": {
                 "name": "Charging"
             },
             "modbus_maintain_min_power": {
-                "name": "Maintain minimum power"
+                "name": "Min charging power"
             },
             "modbus_plug_charge": {
                 "name": "Plug & Charge"
@@ -296,7 +335,7 @@
                 "name": "EMS minimum power mode"
             },
             "modbus_phase_switch": {
-                "name": "Auto phase switching"
+                "name": "Phase switching"
             }
         },
         "button": {

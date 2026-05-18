@@ -217,8 +217,18 @@ class SemsApi:
         ensure_minimum_charging_power: bool | None = None,
         renewToken: bool = False,
         maxTokenRetries: int = 1,
+        max_energy: int | None = None,
+        min_energy: int | None = None,
+        soc_target: int | None = None,
+        finish_time: str | None = None,
     ):
         """Set charge mode/power exclusively via EU gateway (Gen2 / HCA series).
+
+        Optional per-mode params:
+          max_energy  -- maxEnergy (kWh), 0 = unlimited (mode 0 and 2)
+          min_energy  -- minEnergy (kWh), 0 = no minimum (mode 2 only)
+          soc_target  -- soc (%), 0 = no SOC stop condition (mode 0 and 2)
+          finish_time -- finishTime string: "0"=ASAP, "1".."6"=hours (mode 1 and 2)
 
         Skips the legacy semsportal.com SetChargeMode call entirely -- this avoids
         the wallbox being "busy" when the EU gateway set-mode arrives.
@@ -264,6 +274,14 @@ class SemsApi:
                 payload["chargeMaxPower"] = float(chargePower)
             if ensure_minimum_charging_power is not None:
                 payload["ensureMinimumChargingPower"] = ensure_minimum_charging_power
+            if max_energy is not None:
+                payload["maxEnergy"] = int(max_energy)
+            if min_energy is not None:
+                payload["minEnergy"] = int(min_energy)
+            if soc_target is not None:
+                payload["soc"] = int(soc_target)
+            if finish_time is not None:
+                payload["finishTime"] = str(finish_time)
 
             _eu_set_mode_url = self._eu_url(_PATH_SET_MODE)
             _LOGGER.debug(
@@ -434,17 +452,91 @@ class SemsApi:
                 "charge_from_grid": _get("charge_from_grid", "chargeFromGrid", default=1),
                 "isOpen": _get("isOpen", "isConnected", default=False),
                 "currentLimit": _get("currentLimit", "currentLimitValue", default=0.0),
+                # Per-mode charging targets (0 = unlimited / no target)
+                "max_energy": _get("maxEnergy", default=0),
+                "min_energy": _get("minEnergy", default=0),
+                "charge_target_soc": _get("soc", default=0),
+                "finish_time": _get("finishTime", default=None),
                 # ensureMinimumChargingPower: 0 = disabled, 170 (0xAA) = enabled.
                 # Use bool() so 170 → True, 0 → False, None → False.
                 "ensure_minimum_charging_power": bool(
                     raw.get("ensureMinimumChargingPower", 0)
                 ),
+                # chargedNow: 0 = disabled, 170 (0xAA) = enabled (same magic value).
+                "plug_and_charge": bool(raw.get("chargedNow", 0)),
+                # Dynamic Load Control: integer 0/1
+                "dynamicLoad": bool(raw.get("dynamicLoad", 0)),
+                # Phase Switch: integer 0/1 (0 = three-phase, 1 = single-phase)
+                "phaseSwitch": bool(raw.get("phaseSwitch", 0)),
+                # Hardware-rated max charge power (kW) -- informational, read-only
+                "rated_max_charge_power": _get("ratedMaxiChargePower", "ratedMaxChargePower", default=None),
+                # Physical hardware maximum (unchangeable device spec, used as slider ceiling)
+                "hw_max_charge_power": _get("ratedMaxChargePower", default=None),
             }
             return result
 
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("SEMS gen2 getData failed: %s", exc)
             return None
+
+    def set_config_gen2(self, wallbox_sn: str, **props) -> bool:
+        """POST arbitrary properties to EU gateway set-config (Gen2).
+
+        Use for single-property toggles such as:
+          set_config_gen2(sn, chargedNow=170)       # enable Plug & Charge
+          set_config_gen2(sn, chargedNow=0)         # disable Plug & Charge
+          set_config_gen2(sn, dynamicLoad=1)        # enable Dynamic Load Control
+          set_config_gen2(sn, phaseSwitch=1)        # switch to single-phase
+          set_config_gen2(sn, currentLimit=16)      # import current limit (A)
+
+        170 (0xAA) = "feature enabled" magic value used by the SEMS API for
+        boolean-style fields (chargedNow, ensureMinimumChargingPower, lockChargingPlug).
+        """
+        plant_id = self._ensure_plant_id()
+        if not plant_id:
+            _LOGGER.error("SEMS gen2 set_config: no plant_id (sn=%s)", wallbox_sn)
+            return False
+        if not self._ensure_web_token():
+            _LOGGER.error("SEMS gen2 set_config: cannot obtain web token")
+            return False
+        headers = self._build_web_headers()
+        payload: dict = {"sn": wallbox_sn, "plantId": plant_id}
+        if self._product_model:
+            payload["productModel"] = self._product_model
+        payload.update(props)
+        url = self._eu_url(_PATH_SET_CONFIG)
+        _LOGGER.debug("SEMS gen2 set_config: POST %s payload=%s", url, payload)
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=_RequestTimeout)
+            _LOGGER.debug(
+                "SEMS gen2 set_config: HTTP %s body=%s", resp.status_code, resp.text[:300]
+            )
+            rj = resp.json()
+            code = str(rj.get("code") or "")
+            if code == "C0602":
+                _LOGGER.debug("SEMS gen2 set_config: C0602, renewing token and retrying")
+                self._web_token = None
+                if not self._ensure_web_token(renew=True):
+                    return False
+                headers = self._build_web_headers()
+                resp = requests.post(url, headers=headers, json=payload, timeout=_RequestTimeout)
+                rj = resp.json()
+                code = str(rj.get("code") or "")
+            ok = code in ("00000", "0") or rj.get("data") is True
+            if ok:
+                _LOGGER.info("SEMS gen2 set_config succeeded (sn=%s props=%s)", wallbox_sn, props)
+            else:
+                _LOGGER.warning(
+                    "SEMS gen2 set_config non-success code=%s body=%s",
+                    code, resp.text[:300],
+                )
+            return ok
+        except requests.exceptions.Timeout:
+            _LOGGER.warning("SEMS gen2 set_config timed out (sn=%s)", wallbox_sn)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.error("SEMS gen2 set_config failed: %s", exc)
+            return False
 
     def change_status_gen2(self, wallbox_sn: str, action: str) -> bool:
         """Start or stop charging via EU gateway (Gen2 / HCA series).
