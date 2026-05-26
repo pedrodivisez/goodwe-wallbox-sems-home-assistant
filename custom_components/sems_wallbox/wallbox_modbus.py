@@ -173,8 +173,35 @@ class WallboxModbusClient:
                 client.close()
 
     def write_start_stop(self, start: bool) -> bool:
-        """Start (True) or stop (False) charging. Reg 10060: 2=start, 1=stop."""
-        return self._write(10060, 2 if start else 1)
+        """Start (True) or stop (False) charging. Reg 10060: 2=start, 1=stop.
+
+        For the start command a pre-reset to 1 is sent first within the same
+        TCP connection.  The wallbox firmware sometimes ignores a direct 0→2
+        transition; issuing 1→2 (the same sequence the user performs manually
+        when pressing OFF then ON) ensures reliable start.
+        """
+        if not start:
+            return self._write(10060, 1)
+        # Start: pre-reset to 1 then write 2 in a single connection under the lock.
+        with self._lock:
+            try:
+                client = self._make_client()
+            except OSError as exc:
+                _LOGGER.warning("Modbus connect failed for write_start_stop: %s", exc)
+                return False
+            try:
+                client.write_register(10060, 1, device_id=self._device_id)
+                result = client.write_register(10060, 2, device_id=self._device_id)
+                if result.isError():
+                    _LOGGER.warning("Modbus start error: %s", result)
+                    return False
+                _LOGGER.debug("Modbus write reg=10060 value=2 (with pre-reset) OK")
+                return True
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning("Modbus start exception: %s", exc)
+                return False
+            finally:
+                client.close()
 
     def write_charge_mode(self, mode: int) -> bool:
         """Set advanced charging mode. Reg 10032: 0=fast, 1=PV, 2=PV+battery."""

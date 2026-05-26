@@ -497,9 +497,12 @@ class _ModbusSwitch(CoordinatorEntity, SwitchEntity):
 class ModbusStartStopSwitch(_ModbusSwitch):
     """Start / stop charging via Modbus (reg 10060: 2=on, 1=off).
 
-    Shows ON when charging was started either by HA (on_off=2) or by Plug & Charge /
-    auto-start (on_off=0), so the user can turn it OFF to stop an ongoing P&C session.
-    Becomes unavailable when no car is connected (reg 10075 == 0).
+    State is derived from reg 10075 (car_connected):
+      car=2 → CP at 6V → actively charging → switch ON
+      car=1 → CP at 9V → connected but idle  → switch OFF
+      car=0 → no car                          → unavailable
+    reg 10017 (status_raw) is NOT used because the wallbox firmware keeps reporting
+    status=charging (3) even after CP drops back to 9V, causing false ON readings.
     """
 
     _attr_translation_key = "modbus_start_charging"
@@ -517,9 +520,11 @@ class ModbusStartStopSwitch(_ModbusSwitch):
 
     def _api_state(self) -> bool:
         data = self.coordinator.data.get(self.sn, {}) or {}
-        # on_off=0: P&C / auto-start (not set by HA), on_off=2: HA started, on_off=1: HA stopped
-        on_off = data.get("modbus_charging_on_off")
-        return on_off != 1
+        # car_connected=2 means the CP signal is at 6V (car actively drawing power).
+        # car_connected=1 means CP is at 9V -- car is plugged in but not charging.
+        # The pending_state mechanism covers the handshaking window (status=2) where
+        # car is still 1 but the user just pressed ON.
+        return data.get("modbus_car_connected") == 2
 
     def _do_write(self, state: bool) -> bool:
         return self._client.write_start_stop(state)
