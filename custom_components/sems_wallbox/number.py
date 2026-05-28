@@ -751,7 +751,11 @@ class ModbusMaxChargePowerNumber(_ModbusNumber):
     def _api_value(self) -> float | None:
         data = self.coordinator.data.get(self.sn, {}) or {}
         v = data.get("modbus_max_charging_power")
-        return round(float(v), 1) if v is not None else None
+        # 0.0 means the register is at its default (no software limit set);
+        # treat it the same as None and show the hardware maximum instead of 0.
+        if v is None or v == 0.0:
+            return self.native_max_value
+        return round(float(v), 1)
 
     def _do_write(self, value: float) -> bool:
         return self._client.write_max_charge_power(value)

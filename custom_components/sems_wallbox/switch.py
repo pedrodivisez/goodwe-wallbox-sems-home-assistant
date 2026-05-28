@@ -424,6 +424,12 @@ class SemsMinimumPowerSwitch(_SemsConfigSwitch):
 _MODBUS_PENDING_TIMEOUT = 90.0
 
 
+# Status codes that unambiguously mean "not charging and not about to charge".
+# If pending_state is True but the wallbox is in one of these states, the
+# optimistic ON must be abandoned immediately rather than waiting 90 s.
+_MODBUS_TERMINAL_STOPPED = frozenset({0, 1, 4, 5, 7, 8, 10})
+
+
 class _ModbusSwitch(CoordinatorEntity, SwitchEntity):
     """Base class for Modbus-backed boolean controls.
 
@@ -525,6 +531,22 @@ class ModbusStartStopSwitch(_ModbusSwitch):
         # The pending_state mechanism covers the handshaking window (status=2) where
         # car is still 1 but the user just pressed ON.
         return data.get("modbus_car_connected") == 2
+
+    @property
+    def is_on(self) -> bool:
+        """Like base class, but clears a stale optimistic ON on terminal states."""
+        data = self.coordinator.data.get(self.sn, {}) or {}
+        raw_status = data.get("modbus_status_raw")
+        # If we're waiting for charging to confirm (pending=True) but the wallbox
+        # is already in a clearly-stopped state (completed, idle, failed …), there
+        # is no point keeping the optimistic ON for 90 s -- drop it immediately.
+        if self._pending_state is True and raw_status in _MODBUS_TERMINAL_STOPPED:
+            _LOGGER.debug(
+                "%s: clearing optimistic ON -- wallbox in terminal state %s",
+                self.unique_id, raw_status,
+            )
+            self._pending_state = None
+        return super().is_on
 
     def _do_write(self, state: bool) -> bool:
         return self._client.write_start_stop(state)

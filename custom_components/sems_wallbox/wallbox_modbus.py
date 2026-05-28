@@ -363,7 +363,7 @@ class WallboxModbusClient:
         max_cap = b2[7] / 10.0 if b2 else None
         min_cap = b2[8] / 10.0 if b2 else None
         max_power_raw = b2[9] if b2 else None
-        max_power = max_power_raw / 10.0 if max_power_raw else None
+        max_power = max_power_raw / 10.0 if max_power_raw is not None else None
         bat_soc_limit = b2[10] if b2 else None
         completion_time = b2[11] if b2 else None
         charging_mode = b2[12] if b2 else 0
