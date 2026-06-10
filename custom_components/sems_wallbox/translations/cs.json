@@ -1,0 +1,347 @@
+{
+    "title": "GoodWe Wallbox",
+    "exceptions": {
+        "set_charge_mode_failed_fast": {
+            "message": "Přepnutí do režimu Rychlé nabíjení se nezdařilo (vypršel časový limit nebo chyba sítě). Předchozí režim byl obnoven."
+        },
+        "set_charge_mode_failed_pv_priority": {
+            "message": "Přepnutí do režimu PV Priorita se nezdařilo (vypršel časový limit nebo chyba sítě). Předchozí režim byl obnoven."
+        },
+        "set_charge_mode_failed_pv_and_battery": {
+            "message": "Přepnutí do režimu PV a baterie se nezdařilo (vypršel časový limit nebo chyba sítě). Předchozí režim byl obnoven."
+        },
+        "set_charge_power_failed": {
+            "message": "Nepodařilo se nastavit výkon nabíjení na {value} kW. Předchozí hodnota byla obnovena."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Intervaly dotazování",
+                "description": "Nastavte, jak často integrace dotazuje SEMS portál.",
+                "data": {
+                    "scan_interval": "Interval aktualizace v klidu (sekundy)",
+                    "scan_interval_charging": "Interval aktualizace při nabíjení (sekundy)",
+                    "plant_id": "Plant ID",
+                    "product_model": "Model zařízení"
+                },
+                "data_description": {
+                    "scan_interval": "Jak často se data stahují, když se nenabíjí (doporučeno: 60)",
+                    "scan_interval_charging": "Jak často se data stahují při aktivním nabíjení (doporučeno: 30)",
+                    "plant_id": "Nechte prázdné -- detekuje se automaticky.",
+                    "product_model": "Nechte prázdné -- detekuje se automaticky (např. GW11K-HCA)."
+                }
+            }
+        }
+    },
+    "config": {
+        "abort": {
+            "already_configured": "Zařízení je již nakonfigurováno"
+        },
+        "error": {
+            "cannot_connect": "Nepodařilo se připojit k SEMS portálu",
+            "invalid_auth": "Neplatné přihlašovací údaje",
+            "unknown": "Neočekávaná chyba",
+            "no_chargers_found": "V daném plantu nebyly nalezeny žádné nabíječky EV. Zadejte sériové číslo ručně."
+        },
+        "step": {
+            "user": {
+                "title": "Typ připojení",
+                "description": "Zvolte, jak se připojit k wallboxu GoodWe.",
+                "data": {
+                    "connection_type": "Typ připojení"
+                }
+            },
+            "cloud_credentials": {
+                "title": "Připojení k SEMS portálu",
+                "description": "Zadejte přihlašovací údaje SEMS portálu. Wallbox bude detekován automaticky.",
+                "data": {
+                    "username": "Uživatelské jméno (e-mail)",
+                    "password": "Heslo"
+                }
+            },
+            "modbus": {
+                "title": "Lokální Modbus TCP",
+                "description": "Připojte se k wallboxu přímo přes lokální síť pomocí Modbus TCP (bez cloudu).",
+                "data": {
+                    "modbus_host": "IP adresa nebo hostname",
+                    "modbus_port": "Port",
+                    "modbus_device_id": "Modbus ID zařízení (0 = automaticky)"
+                },
+                "data_description": {
+                    "modbus_device_id": "Nechte 0 pro automatickou detekci. GoodWe Wallbox Gen2 používá 247 (0xF7)."
+                }
+            },
+            "plant": {
+                "title": "Vyberte plant / stanici",
+                "description": "V účtu bylo nalezeno více plantů. Vyberte ten, který obsahuje váš wallbox.",
+                "data": {
+                    "plant_id": "Plant / stanice"
+                }
+            },
+            "charger": {
+                "title": "Vyberte wallbox",
+                "description": "Bylo nalezeno více nabíječek EV. Vyberte váš wallbox.",
+                "data": {
+                    "wallbox_serial_No": "Wallbox"
+                }
+            },
+            "charger_manual": {
+                "title": "Zadejte sériové číslo wallboxu",
+                "description": "Wallbox se nepodařilo detekovat automaticky. Zadejte sériové číslo ručně (najdete v aplikaci SEMS nebo na štítku zařízení).",
+                "data": {
+                    "wallbox_serial_No": "Sériové číslo wallboxu",
+                    "plant_id": "Plant ID (volitelné)"
+                }
+            },
+            "model": {
+                "title": "Model produktu",
+                "description": "Model produktu se nepodařilo detekovat automaticky. Najdete ho v aplikaci SEMS nebo na štítku zařízení (např. GW11K-HCA). Nechte prázdné pro přeskočení -- lze zadat i dodatečně v nastavení integrace.",
+                "data": {
+                    "product_model": "Model produktu (např. GW11K-HCA)"
+                }
+            }
+        }
+    },
+    "entity": {
+        "sensor": {
+            "status": {
+                "name": "Stav",
+                "state": {
+                    "charging": "Nabíjení",
+                    "standby": "Připraveno",
+                    "offline": "Offline",
+                    "unknown": "Neznámý"
+                }
+            },
+            "workstate": {
+                "name": "Stav vozidla",
+                "state": {
+                    "not_plugged_in": "Nepřipojeno",
+                    "connected": "Připojeno",
+                    "finished_charging": "Nabíjení dokončeno",
+                    "charged": "Nabito",
+                    "dash": "--",
+                    "unknown": "Neznámý"
+                }
+            },
+            "power": {
+                "name": "Výkon nabíjení"
+            },
+            "energy": {
+                "name": "Nabito celkem"
+            },
+            "set_charge_power_limit": {
+                "name": "Přidělený nabíjecí výkon"
+            },
+            "charge_duration": {
+                "name": "Doba nabíjení"
+            },
+            "modbus_charging_status": {
+                "name": "Stav nabíjecí stanice",
+                "state": {
+                    "idle_no_plug": "Neaktivní (nepřipojen kabel)",
+                    "idle_plugged": "Neaktivní (kabel zapojen)",
+                    "handshaking": "Navazování spojení",
+                    "charging": "Nabíjení",
+                    "charging_completed": "Nabíjení dokončeno",
+                    "abnormal_alarm": "Porucha / alarm",
+                    "scheduled_start": "Plánovaný start",
+                    "maintenance": "Údržba",
+                    "start_failed": "Spuštění se nezdařilo",
+                    "upgrading": "Aktualizace firmware",
+                    "interrupted": "Přerušeno",
+                    "unknown": "Neznámý"
+                }
+            },
+            "modbus_car_connection": {
+                "name": "Stav připojení vozidla",
+                "state": {
+                    "disconnected": "Odpojeno",
+                    "half_connected": "Polozapojeno (zamknuto)",
+                    "connected": "Zapojeno",
+                    "unknown": "Neznámý"
+                }
+            },
+            "voltage_a": { "name": "Napětí fáze A" },
+            "voltage_b": { "name": "Napětí fáze B" },
+            "voltage_c": { "name": "Napětí fáze C" },
+            "current_a": { "name": "Proud fáze A" },
+            "current_b": { "name": "Proud fáze B" },
+            "current_c": { "name": "Proud fáze C" },
+            "modbus_fault_state": {
+                "name": "Stav poruch",
+                "state": {
+                    "ok": "OK",
+                    "warning": "Varování",
+                    "fault": "Porucha"
+                }
+            },
+            "modbus_comm_status": {
+                "name": "Stav připojení"
+            },
+            "modbus_start_mode": {
+                "name": "Způsob spuštění nabíjení",
+                "state": {
+                    "auth_card": "Autorizační karta",
+                    "backend": "Backend",
+                    "local_admin": "Lokální správce",
+                    "vin": "VIN",
+                    "wallet_card": "Platební karta",
+                    "plug_and_charge": "Plug & Charge",
+                    "scheduled": "Naplánováno",
+                    "bluetooth": "Bluetooth",
+                    "unknown": "Neznámý"
+                }
+            },
+            "modbus_charging_strategy": {
+                "name": "Strategie nabíjení",
+                "state": {
+                    "auto_full": "Automaticky (plné nabití)",
+                    "fill_by_time": "Nabít do času",
+                    "fixed_amount": "Pevná energie",
+                    "charge_by_energy": "Nabít na energii",
+                    "unknown": "Neznámá"
+                }
+            },
+            "modbus_appointment_sign": {
+                "name": "Rezervace",
+                "state": {
+                    "no_reservation": "Bez rezervace",
+                    "reserved": "Rezervováno"
+                }
+            },
+            "modbus_power_source_sensor": {
+                "name": "Zdroj energie",
+                "state": {
+                    "none": "Žádný",
+                    "grid": "Síť",
+                    "pv": "FVE",
+                    "battery": "Baterie",
+                    "grid_pv": "Síť + FVE",
+                    "grid_battery": "Síť + baterie",
+                    "pv_battery": "FVE + baterie",
+                    "grid_pv_battery": "Síť + FVE + baterie",
+                    "unknown": "Neznámý"
+                }
+            }
+        },
+        "select": {
+            "charge_mode": {
+                "name": "Režim nabíjení",
+                "state": {
+                    "fast": "Rychle",
+                    "pv_priority": "PV Priorita",
+                    "pv_and_battery": "PV a baterie"
+                }
+            },
+            "charge_duration": {
+                "name": "Doba nabíjení",
+                "state": {
+                    "asap": "Co nejdříve",
+                    "1h": "1 hodina",
+                    "2h": "2 hodiny",
+                    "3h": "3 hodiny",
+                    "4h": "4 hodiny",
+                    "5h": "5 hodin",
+                    "6h": "6 hodin"
+                }
+            },
+            "modbus_charge_mode": {
+                "name": "Režim nabíjení",
+                "state": {
+                    "fast": "Rychle",
+                    "pv_priority": "PV Priorita",
+                    "pv_and_battery": "PV a baterie"
+                }
+            },
+            "modbus_charge_duration": {
+                "name": "Doba nabíjení",
+                "state": {
+                    "asap": "Co nejdříve",
+                    "1h": "1 hodina",
+                    "2h": "2 hodiny",
+                    "3h": "3 hodiny",
+                    "4h": "4 hodiny",
+                    "5h": "5 hodin",
+                    "6h": "6 hodin"
+                }
+            }
+        },
+        "number": {
+            "charge_power": {
+                "name": "Max. nabíjecí výkon"
+            },
+            "current_limit": {
+                "name": "Limit proudu ze sítě"
+            },
+            "max_session_energy": {
+                "name": "Max. energie sezení"
+            },
+            "min_session_energy": {
+                "name": "Min. energie sezení"
+            },
+            "charge_target_soc": {
+                "name": "Min. SOC baterie"
+            },
+            "output_power_limit": {
+                "name": "Limit výstupního výkonu"
+            },
+            "modbus_charge_power": {
+                "name": "Max. nabíjecí výkon"
+            },
+            "modbus_max_capacity": {
+                "name": "Max. energie sezení"
+            },
+            "modbus_min_capacity": {
+                "name": "Min. energie sezení"
+            },
+            "modbus_bat_soc_limit": {
+                "name": "Min. SOC baterie"
+            },
+            "modbus_current_limit": {
+                "name": "Limit proudu ze sítě"
+            }
+        },
+        "switch": {
+            "start_charging": {
+                "name": "Nabíjení"
+            },
+            "ensure_minimum_charging_power": {
+                "name": "Minimální nabíjecí výkon"
+            },
+            "plug_and_charge": {
+                "name": "Plug & Charge"
+            },
+            "dynamic_load_control": {
+                "name": "Dynamická správa zátěže"
+            },
+            "phase_switch": {
+                "name": "Přepínání fází"
+            },
+            "modbus_start_charging": {
+                "name": "Nabíjení"
+            },
+            "modbus_maintain_min_power": {
+                "name": "Minimální nabíjecí výkon"
+            },
+            "modbus_plug_charge": {
+                "name": "Plug & Charge"
+            },
+            "modbus_dynamic_load": {
+                "name": "Dynamická správa zátěže"
+            },
+            "modbus_ems_dispatch": {
+                "name": "EMS minimální výkon"
+            },
+            "modbus_phase_switch": {
+                "name": "Přepínání fází"
+            }
+        },
+        "button": {
+            "modbus_refresh": {
+                "name": "Obnovit"
+            }
+        }
+    }
+}
