@@ -173,35 +173,8 @@ class WallboxModbusClient:
                 client.close()
 
     def write_start_stop(self, start: bool) -> bool:
-        """Start (True) or stop (False) charging. Reg 10060: 2=start, 1=stop.
-
-        For the start command a pre-reset to 1 is sent first within the same
-        TCP connection.  The wallbox firmware sometimes ignores a direct 0→2
-        transition; issuing 1→2 (the same sequence the user performs manually
-        when pressing OFF then ON) ensures reliable start.
-        """
-        if not start:
-            return self._write(10060, 1)
-        # Start: pre-reset to 1 then write 2 in a single connection under the lock.
-        with self._lock:
-            try:
-                client = self._make_client()
-            except OSError as exc:
-                _LOGGER.warning("Modbus connect failed for write_start_stop: %s", exc)
-                return False
-            try:
-                client.write_register(10060, 1, device_id=self._device_id)
-                result = client.write_register(10060, 2, device_id=self._device_id)
-                if result.isError():
-                    _LOGGER.warning("Modbus start error: %s", result)
-                    return False
-                _LOGGER.debug("Modbus write reg=10060 value=2 (with pre-reset) OK")
-                return True
-            except Exception as exc:  # noqa: BLE001
-                _LOGGER.warning("Modbus start exception: %s", exc)
-                return False
-            finally:
-                client.close()
+        """Start (True) or stop (False) charging. Reg 10060: 2=start, 1=stop."""
+        return self._write(10060, 2 if start else 1)
 
     def write_charge_mode(self, mode: int) -> bool:
         """Set advanced charging mode. Reg 10032: 0=fast, 1=PV, 2=PV+battery."""
@@ -322,8 +295,11 @@ class WallboxModbusClient:
         if b3 is None:
             return None
 
-        # Block 4: runtime (10060-10079)
-        b4 = self._read(client, 10060, 20)
+        # Block 4: runtime (10061-10079)
+        # NOTE: reg 10060 is write-only (1=stop, 2=start). Reading it has side effects
+        # on the firmware -- it resets to 0 which the wallbox interprets as a stop
+        # command, killing an active charging session. NEVER read reg 10060.
+        b4 = self._read(client, 10061, 19)
         if b4 is None:
             return None
 
@@ -377,18 +353,18 @@ class WallboxModbusClient:
         power_spec = b3[18]
         pile_type = b3[19]
 
-        # -- Parse block 4 (runtime) --
-        charging_on_off = b4[0]   # 1=off, 2=on (reg 10060)
-        charge_duration_s = _decode_u32(b4[3], b4[4])
-        hist_energy_raw = _decode_u32(b4[5], b4[6])
+        # -- Parse block 4 (runtime, starting at 10061, index 0 = reg 10061) --
+        # reg 10060 (write-only start/stop) intentionally NOT read -- see block read comment
+        charge_duration_s = _decode_u32(b4[2], b4[3])   # 10063, 10064
+        hist_energy_raw = _decode_u32(b4[4], b4[5])      # 10065, 10066
         hist_energy = hist_energy_raw / 10.0
-        pile_time_ym = b4[7]
-        pile_time_dh = b4[8]
-        pile_time_ms = b4[9]
-        car_connection = b4[15]
-        start_mode = b4[16]
-        charging_strategy = b4[17]
-        appointment_sign = b4[19]
+        pile_time_ym = b4[6]    # 10067
+        pile_time_dh = b4[7]    # 10068
+        pile_time_ms = b4[8]    # 10069
+        car_connection = b4[14] # 10075
+        start_mode = b4[15]     # 10076
+        charging_strategy = b4[16]  # 10077
+        appointment_sign = b4[18]   # 10079
 
         # -- Parse block 5 (extras) --
         cp_state = None
@@ -510,8 +486,6 @@ class WallboxModbusClient:
             "modbus_project_type": project_type,
             "modbus_ems_dispatch": ems_dispatch,
             # reg 10060: 2=charging enabled by HA command, 1=off, 0=not set (e.g. Plug&Charge)
-            "modbus_charging_on_off": charging_on_off,
-            "modbus_charging_enabled": (charging_on_off == 2),
             "modbus_start_mode": start_mode,
             "modbus_charging_strategy": charging_strategy,
             "modbus_appointment_sign": appointment_sign,

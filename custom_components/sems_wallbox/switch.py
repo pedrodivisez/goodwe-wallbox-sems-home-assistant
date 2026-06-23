@@ -526,11 +526,14 @@ class ModbusStartStopSwitch(_ModbusSwitch):
 
     def _api_state(self) -> bool:
         data = self.coordinator.data.get(self.sn, {}) or {}
-        # car_connected=2 means the CP signal is at 6V (car actively drawing power).
-        # car_connected=1 means CP is at 9V -- car is plugged in but not charging.
-        # The pending_state mechanism covers the handshaking window (status=2) where
-        # car is still 1 but the user just pressed ON.
-        return data.get("modbus_car_connected") == 2
+        # Use status register (10017) as the single source of truth.
+        # status=3 means the wallbox considers a charging session active.
+        # car_connected and CP voltage are NOT used: car_connected stays at 1
+        # on firmware 6387+ even during active charging (firmware behaviour change),
+        # and power can be 0 legitimately in PV mode while the session is held open.
+        # Phantom sessions (status=3, power=0 after car disconnect) are handled
+        # separately by the phantom-charging auto-stop in the coordinator.
+        return data.get("modbus_status_raw") == 3
 
     @property
     def is_on(self) -> bool:
