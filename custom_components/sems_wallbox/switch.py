@@ -511,11 +511,11 @@ class ModbusStartStopSwitch(_ModbusSwitch):
     status=charging (3) even after CP drops back to 9V, causing false ON readings.
     """
 
-    _attr_translation_key = "modbus_start_charging"
+    _attr_translation_key = "start_charging"
 
     @property
     def unique_id(self) -> str:
-        return f"{self.sn}_modbus_start_stop"
+        return f"{self.sn}-switch-start-charging"
 
     @property
     def available(self) -> bool:
@@ -558,12 +558,12 @@ class ModbusStartStopSwitch(_ModbusSwitch):
 class ModbusMaintainMinPowerSwitch(_ModbusSwitch):
     """Enable / disable maintain minimum charging power (reg 10024)."""
 
-    _attr_translation_key = "modbus_maintain_min_power"
+    _attr_translation_key = "ensure_minimum_charging_power"
     _attr_entity_category = EntityCategory.CONFIG
 
     @property
     def unique_id(self) -> str:
-        return f"{self.sn}_modbus_maintain_min_power"
+        return f"{self.sn}-switch-ensure-minimum-power"
 
     @property
     def available(self) -> bool:
@@ -583,12 +583,12 @@ class ModbusMaintainMinPowerSwitch(_ModbusSwitch):
 class ModbusPlugChargeSwitch(_ModbusSwitch):
     """Enable / disable Plug & Charge function (reg 10019)."""
 
-    _attr_translation_key = "modbus_plug_charge"
+    _attr_translation_key = "plug_and_charge"
     _attr_entity_category = EntityCategory.CONFIG
 
     @property
     def unique_id(self) -> str:
-        return f"{self.sn}_modbus_plug_charge"
+        return f"{self.sn}-switch-plug-and-charge"
 
     def _api_state(self) -> bool:
         data = self.coordinator.data.get(self.sn, {}) or {}
@@ -601,12 +601,12 @@ class ModbusPlugChargeSwitch(_ModbusSwitch):
 class ModbusDynamicLoadMgmtSwitch(_ModbusSwitch):
     """Enable / disable dynamic load management (reg 10025)."""
 
-    _attr_translation_key = "modbus_dynamic_load"
+    _attr_translation_key = "dynamic_load_control"
     _attr_entity_category = EntityCategory.CONFIG
 
     @property
     def unique_id(self) -> str:
-        return f"{self.sn}_modbus_dynamic_load"
+        return f"{self.sn}-switch-dynamic-load"
 
     def _api_state(self) -> bool:
         data = self.coordinator.data.get(self.sn, {}) or {}
@@ -643,12 +643,12 @@ class ModbusPhaseSwitchSwitch(_ModbusSwitch):
     per the protocol spec; the firmware handles phase selection internally.
     """
 
-    _attr_translation_key = "modbus_phase_switch"
+    _attr_translation_key = "phase_switch"
     _attr_entity_category = EntityCategory.CONFIG
 
     @property
     def unique_id(self) -> str:
-        return f"{self.sn}_modbus_phase_switch"
+        return f"{self.sn}-switch-phase-switch"
 
     @property
     def available(self) -> bool:

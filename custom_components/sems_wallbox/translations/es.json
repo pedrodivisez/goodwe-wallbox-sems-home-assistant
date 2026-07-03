@@ -322,23 +322,8 @@
             "phase_switch": {
                 "name": "Cambio de fase"
             },
-            "modbus_start_charging": {
-                "name": "Cargando"
-            },
-            "modbus_maintain_min_power": {
-                "name": "Potencia min. de carga"
-            },
-            "modbus_plug_charge": {
-                "name": "Conectar y cargar"
-            },
-            "modbus_dynamic_load": {
-                "name": "Gestión de carga dinámica"
-            },
             "modbus_ems_dispatch": {
                 "name": "Modo de potencia minima EMS"
-            },
-            "modbus_phase_switch": {
-                "name": "Cambio de fase"
             }
         },
         "button": {

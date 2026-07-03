@@ -319,23 +319,8 @@
             "phase_switch": {
                 "name": "Přepínání fází"
             },
-            "modbus_start_charging": {
-                "name": "Nabíjení"
-            },
-            "modbus_maintain_min_power": {
-                "name": "Minimální nabíjecí výkon"
-            },
-            "modbus_plug_charge": {
-                "name": "Plug & Charge"
-            },
-            "modbus_dynamic_load": {
-                "name": "Dynamická správa zátěže"
-            },
             "modbus_ems_dispatch": {
                 "name": "EMS minimální výkon"
-            },
-            "modbus_phase_switch": {
-                "name": "Přepínání fází"
             }
         },
         "button": {

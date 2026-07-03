@@ -319,23 +319,8 @@
             "phase_switch": {
                 "name": "Phasenumschaltung"
             },
-            "modbus_start_charging": {
-                "name": "Laden"
-            },
-            "modbus_maintain_min_power": {
-                "name": "Min. Ladeleistung"
-            },
-            "modbus_plug_charge": {
-                "name": "Plug & Charge"
-            },
-            "modbus_dynamic_load": {
-                "name": "Dynamisches Lastmanagement"
-            },
             "modbus_ems_dispatch": {
                 "name": "EMS-Minimalleistungsmodus"
-            },
-            "modbus_phase_switch": {
-                "name": "Phasenumschaltung"
             }
         },
         "button": {
